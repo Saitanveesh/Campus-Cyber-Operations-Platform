@@ -22,6 +22,7 @@ def test_snapshot_has_live_contract_before_start():
         "suricata-feed",
         "malware-analysis",
         "telemetry",
+        "local-host-telemetry",
         "voice-alert",
         "tool-probe",
         "network-discovery",
