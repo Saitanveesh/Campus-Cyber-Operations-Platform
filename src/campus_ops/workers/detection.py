@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import time
 from collections import defaultdict, deque
 
@@ -21,11 +20,19 @@ class BehaviourDetectionWorker(BaseWorker):
         self.dns_windows: dict[str, deque[float]] = defaultdict(deque)
         self.last_alert: dict[str, float] = {}
 
-    async def _alert(self, session_id: str, key: str, severity: Severity, title: str, evidence: dict[str, object]) -> None:
+    async def _alert(
+        self,
+        session_id: str,
+        key: str,
+        severity: Severity,
+        title: str,
+        evidence: dict[str, object],
+    ) -> None:
         now = time.monotonic()
         if now - self.last_alert.get(key, 0.0) < 20:
             return
         self.last_alert[key] = now
+        confidence = evidence.pop("confidence", 0)
         await self.bus.publish(
             Event(
                 source=self.name,
@@ -33,7 +40,12 @@ class BehaviourDetectionWorker(BaseWorker):
                 session_id=session_id,
                 severity=severity,
                 evidence_class="BEHAVIOURAL_INDICATOR",
-                payload={"type": "SECURITY_INDICATOR", "title": title, "confidence": evidence.pop("confidence", 0), "evidence": evidence},
+                payload={
+                    "type": "SECURITY_INDICATOR",
+                    "title": title,
+                    "confidence": confidence,
+                    "evidence": evidence,
+                },
             )
         )
 
