@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from campus_ops.config import DEFAULT_SETTINGS, Settings
 from campus_ops.control import EndpointControl
+from campus_ops.evidence import EvidenceExporter
 from campus_ops.event_bus import EventBus, Subscription
 from campus_ops.models import Event, EventKind, Severity, WorkerState
 from campus_ops.state import LiveState
@@ -50,6 +51,7 @@ class Orchestrator:
         self.settings = settings
         self.bus = EventBus()
         self.state = LiveState()
+        self.evidence = EvidenceExporter(self.state)
         self.started_at: datetime | None = None
         self.session_id: str | None = None
         self.network = NetworkDiscoveryWorker(
@@ -318,6 +320,7 @@ class Orchestrator:
             "event_bus": self.bus.stats(),
             "enrolled_endpoints": self.control.list(),
             "evidence_root": str(self.forensic_capture.root),
+            "incident_bundle_root": str(self.evidence.root),
             "malware_staging": str(self.malware.staging),
             "voice": self.voice.status(),
             "live": self.state.snapshot(),
