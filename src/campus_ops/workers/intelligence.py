@@ -84,12 +84,14 @@ class IntelligenceWorker(BaseWorker):
                 if src_ip and src_role not in {"SPECIAL_ADDRESS", "MULTICAST", "BROADCAST", "UNKNOWN"}:
                     previous = self.state.get_asset(src_ip)
                     hostname = payload.get("dhcp_hostname") or previous.get("hostname")
+                    vendor = payload.get("eth_src_vendor") or previous.get("vendor")
                     self.state.upsert_asset(
                         src_ip,
                         {
                             "id": src_ip,
                             "ip": src_ip,
                             "mac": eth_src or previous.get("mac"),
+                            "vendor": vendor,
                             "role": src_role,
                             "classification": src_role,
                             "local_device": src_role
