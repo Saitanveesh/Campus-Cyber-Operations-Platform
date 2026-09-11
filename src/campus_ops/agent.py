@@ -175,7 +175,7 @@ def _request(
             "User-Agent": f"CampusCyberAgent/{AGENT_VERSION}",
         },
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         raw = response.read().decode("utf-8")
     return json.loads(raw) if raw else {}
 
