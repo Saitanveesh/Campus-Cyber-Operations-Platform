@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 from campus_ops.event_bus import EventBus
-from campus_ops.models import WorkerState
+from campus_ops.models import Event, EventKind, WorkerState
 from campus_ops.workers.base import BaseWorker
 
 
@@ -17,8 +17,15 @@ def default_history_path() -> Path:
     return root / "history.db"
 
 
+def should_persist(event: Event) -> bool:
+    """Keep durable operational evidence, not every packet observation."""
+    if event.kind != EventKind.OBSERVATION:
+        return True
+    return event.payload.get("type") not in {"PACKET", "PERFORMANCE"}
+
+
 class HistoryWorker(BaseWorker):
-    """Append-only historical event storage; never feeds current live state."""
+    """Historical event storage; it never feeds current live state."""
 
     def __init__(self, bus: EventBus, path: Path | None = None) -> None:
         super().__init__("history-storage", bus)
@@ -28,6 +35,7 @@ class HistoryWorker(BaseWorker):
     def _open(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS events (
@@ -46,29 +54,45 @@ class HistoryWorker(BaseWorker):
         conn.commit()
         return conn
 
+    @staticmethod
+    def _row(event: Event) -> tuple[str, str, str | None, str, str, str, str, str]:
+        return (
+            event.event_id,
+            event.timestamp.isoformat(),
+            event.session_id,
+            event.source,
+            event.kind.value,
+            event.severity.value,
+            event.evidence_class,
+            json.dumps(dict(event.payload), sort_keys=True, default=str),
+        )
+
     async def run(self) -> None:
         sub = await self.bus.subscribe(self.name)
         self._conn = self._open()
         self.health.state = WorkerState.HEALTHY
+        pending: list[tuple[str, str, str | None, str, str, str, str, str]] = []
         try:
             while not self.stopping:
-                event = await sub.queue.get()
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        event.event_id,
-                        event.timestamp.isoformat(),
-                        event.session_id,
-                        event.source,
-                        event.kind.value,
-                        event.severity.value,
-                        event.evidence_class,
-                        json.dumps(dict(event.payload), sort_keys=True, default=str),
-                    ),
-                )
-                self._conn.commit()
+                try:
+                    event = await asyncio.wait_for(sub.queue.get(), timeout=1.0)
+                except TimeoutError:
+                    event = None
+                if event is not None and should_persist(event):
+                    pending.append(self._row(event))
+                if pending and (len(pending) >= 100 or event is None):
+                    self._conn.executemany(
+                        "INSERT OR IGNORE INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?)", pending
+                    )
+                    self._conn.commit()
+                    pending.clear()
                 self.health.heartbeat(f"history={self.path.name}")
         finally:
+            if pending and self._conn:
+                self._conn.executemany(
+                    "INSERT OR IGNORE INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?)", pending
+                )
+                self._conn.commit()
             await self.bus.unsubscribe(self.name)
             if self._conn:
                 self._conn.close()
