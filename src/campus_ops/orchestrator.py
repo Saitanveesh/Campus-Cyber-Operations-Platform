@@ -13,6 +13,7 @@ from campus_ops.control import EndpointControl
 from campus_ops.event_bus import EventBus, Subscription
 from campus_ops.models import Event, EventKind, Severity, WorkerState
 from campus_ops.state import LiveState
+from campus_ops.workers.application_intelligence import ApplicationIntelligenceWorker
 from campus_ops.workers.arp_guard import ArpGuardWorker
 from campus_ops.workers.capture import CaptureWorker
 from campus_ops.workers.detection import BehaviourDetectionWorker
@@ -59,6 +60,11 @@ class Orchestrator:
             self.get_session_id,
             self.get_network_context,
         )
+        self.application_intelligence = ApplicationIntelligenceWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
         self.tcp_intelligence = TcpIntelligenceWorker(
             self.bus,
             self.state,
@@ -94,6 +100,7 @@ class Orchestrator:
             self.state_sink,
             self.history,
             self.intelligence,
+            self.application_intelligence,
             self.tcp_intelligence,
             self.arp_guard,
             self.detection,
