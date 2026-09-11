@@ -13,6 +13,7 @@ from campus_ops.control import EndpointControl
 from campus_ops.event_bus import EventBus, Subscription
 from campus_ops.models import Event, EventKind, Severity, WorkerState
 from campus_ops.state import LiveState
+from campus_ops.workers.arp_guard import ArpGuardWorker
 from campus_ops.workers.capture import CaptureWorker
 from campus_ops.workers.detection import BehaviourDetectionWorker
 from campus_ops.workers.dos_warning import DosEarlyWarningWorker
@@ -24,6 +25,7 @@ from campus_ops.workers.malware import MalwareAnalysisWorker
 from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
 from campus_ops.workers.state_sink import StateSinkWorker
 from campus_ops.workers.suricata_feed import SuricataFeedWorker
+from campus_ops.workers.tcp_intelligence import TcpIntelligenceWorker
 from campus_ops.workers.telemetry import TelemetryWorker
 from campus_ops.workers.tool_probe import ToolProbeWorker
 from campus_ops.workers.voice import VoiceAlertWorker
@@ -57,6 +59,12 @@ class Orchestrator:
             self.get_session_id,
             self.get_network_context,
         )
+        self.tcp_intelligence = TcpIntelligenceWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.arp_guard = ArpGuardWorker(self.bus, self.get_session_id)
         self.detection = BehaviourDetectionWorker(self.bus, self.state, self.get_session_id)
         self.dos_warning = DosEarlyWarningWorker(self.bus, self.get_session_id)
         self.incidents = IncidentCorrelationWorker(self.bus, self.state, self.get_session_id)
@@ -86,6 +94,8 @@ class Orchestrator:
             self.state_sink,
             self.history,
             self.intelligence,
+            self.tcp_intelligence,
+            self.arp_guard,
             self.detection,
             self.dos_warning,
             self.incidents,
