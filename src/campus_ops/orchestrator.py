@@ -5,6 +5,7 @@ import hashlib
 import json
 from dataclasses import asdict
 from datetime import UTC, datetime
+from typing import ClassVar
 from uuid import uuid4
 
 from campus_ops.config import DEFAULT_SETTINGS, Settings
@@ -31,7 +32,9 @@ from campus_ops.workers.voice import VoiceAlertWorker
 class Orchestrator:
     """Single authority for worker lifecycle and the current live session."""
 
-    OPTIONAL_DEGRADED_WORKERS = {"suricata-feed", "forensic-pcap"}
+    OPTIONAL_DEGRADED_WORKERS: ClassVar[frozenset[str]] = frozenset(
+        {"suricata-feed", "forensic-pcap"}
+    )
 
     def __init__(self, settings: Settings = DEFAULT_SETTINGS) -> None:
         self.settings = settings
@@ -184,14 +187,21 @@ class Orchestrator:
             return
         self.started_at = datetime.now(UTC)
         self._session_sub = await self.bus.subscribe("session-manager")
-        self._session_task = asyncio.create_task(self._session_loop(self._session_sub), name="session-manager")
+        self._session_task = asyncio.create_task(
+            self._session_loop(self._session_sub),
+            name="session-manager",
+        )
         for worker in self.workers:
             await worker.start()
         await self.bus.publish(
             Event(
                 source="orchestrator",
-                kind=EventKind.SYSTEM,
-                payload={"state": "STARTED", "live_contract": "CURRENT_SESSION_ONLY"},
+                kind=EventKind.ACTION,
+                payload={
+                    "state": "STARTED",
+                    "message": "Live Operations Console started",
+                    "voice": "Welcome back, Sai Tanveesh. Live Operations Console is starting.",
+                },
             )
         )
 
@@ -214,13 +224,19 @@ class Orchestrator:
             worker.name: {
                 "state": worker.health.state.value,
                 "detail": worker.health.detail,
-                "last_heartbeat": worker.health.last_heartbeat.isoformat() if worker.health.last_heartbeat else None,
+                "last_heartbeat": (
+                    worker.health.last_heartbeat.isoformat()
+                    if worker.health.last_heartbeat
+                    else None
+                ),
                 "last_error": worker.health.last_error,
                 "optional": worker.name in self.OPTIONAL_DEGRADED_WORKERS,
             }
             for worker in self.workers
         }
-        core_workers = [worker for worker in self.workers if worker.name not in self.OPTIONAL_DEGRADED_WORKERS]
+        core_workers = [
+            worker for worker in self.workers if worker.name not in self.OPTIONAL_DEGRADED_WORKERS
+        ]
         overall = "HEALTHY"
         if any(worker.health.state == WorkerState.FAILED for worker in core_workers):
             overall = "FAILED"
