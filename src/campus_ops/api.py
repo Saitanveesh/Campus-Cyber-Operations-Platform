@@ -2,11 +2,27 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Literal
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
+from campus_ops.control import EnrolledEndpoint
 from campus_ops.orchestrator import Orchestrator
+
+
+class EndpointEnrollRequest(BaseModel):
+    endpoint_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=128)
+    host: str = Field(min_length=1, max_length=255)
+    platform: Literal["windows", "linux", "other"] = "other"
+    allow_rdp: bool = False
+    allow_ssh: bool = False
+
+
+class EndpointConnectRequest(BaseModel):
+    protocol: Literal["rdp", "ssh"]
 
 
 def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
@@ -126,6 +142,30 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
     @app.get("/api/v1/system/tools")
     async def system_tools() -> dict[str, object]:
         return {"tools": orch.tools.statuses}
+
+    @app.get("/api/v1/endpoints")
+    async def endpoints() -> dict[str, object]:
+        return {"endpoints": orch.control.list(), "control_scope": "EXPLICITLY_ENROLLED_ONLY"}
+
+    @app.post("/api/v1/endpoints")
+    async def enroll_endpoint(request: EndpointEnrollRequest) -> dict[str, object]:
+        endpoint = EnrolledEndpoint(**request.model_dump())
+        return {"endpoint": orch.control.enroll(endpoint)}
+
+    @app.delete("/api/v1/endpoints/{endpoint_id}")
+    async def remove_endpoint(endpoint_id: str) -> dict[str, object]:
+        if not orch.control.remove(endpoint_id):
+            raise HTTPException(status_code=404, detail="endpoint not enrolled")
+        return {"removed": endpoint_id}
+
+    @app.post("/api/v1/endpoints/{endpoint_id}/connect")
+    async def connect_endpoint(endpoint_id: str, request: EndpointConnectRequest) -> dict[str, object]:
+        try:
+            return await orch.control.connect(endpoint_id, request.protocol)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     @app.websocket("/api/v1/live/ws")
     async def live_ws(websocket: WebSocket) -> None:
