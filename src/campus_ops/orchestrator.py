@@ -29,6 +29,8 @@ from campus_ops.workers.voice import VoiceAlertWorker
 class Orchestrator:
     """Single authority for worker lifecycle and the current live session."""
 
+    OPTIONAL_DEGRADED_WORKERS = {"suricata-feed"}
+
     def __init__(self, settings: Settings = DEFAULT_SETTINGS) -> None:
         self.settings = settings
         self.bus = EventBus()
@@ -44,7 +46,12 @@ class Orchestrator:
         self.tools = ToolProbeWorker(self.bus, interval=settings.tool_probe_seconds)
         self.state_sink = StateSinkWorker(self.bus, self.state)
         self.history = HistoryWorker(self.bus)
-        self.intelligence = IntelligenceWorker(self.bus, self.state, self.get_session_id)
+        self.intelligence = IntelligenceWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+            self.get_network_context,
+        )
         self.detection = BehaviourDetectionWorker(self.bus, self.state, self.get_session_id)
         self.incidents = IncidentCorrelationWorker(self.bus, self.state, self.get_session_id)
         self.suricata = SuricataFeedWorker(self.bus, self.get_session_id)
@@ -86,6 +93,9 @@ class Orchestrator:
 
     def get_interface(self) -> str | None:
         return self.network.selected.interface if self.network.selected else None
+
+    def get_network_context(self) -> dict[str, object] | None:
+        return asdict(self.network.selected) if self.network.selected else None
 
     @staticmethod
     def _fingerprint(current: dict[str, object]) -> str:
@@ -196,13 +206,15 @@ class Orchestrator:
                 "detail": worker.health.detail,
                 "last_heartbeat": worker.health.last_heartbeat.isoformat() if worker.health.last_heartbeat else None,
                 "last_error": worker.health.last_error,
+                "optional": worker.name in self.OPTIONAL_DEGRADED_WORKERS,
             }
             for worker in self.workers
         }
+        core_workers = [worker for worker in self.workers if worker.name not in self.OPTIONAL_DEGRADED_WORKERS]
         overall = "HEALTHY"
-        if any(worker.health.state == WorkerState.FAILED for worker in self.workers):
+        if any(worker.health.state == WorkerState.FAILED for worker in core_workers):
             overall = "FAILED"
-        elif any(worker.health.state == WorkerState.DEGRADED for worker in self.workers):
+        elif any(worker.health.state == WorkerState.DEGRADED for worker in core_workers):
             overall = "DEGRADED"
         return {
             "product": "Campus Cyber Operations Platform",
@@ -211,7 +223,7 @@ class Orchestrator:
             "overall": overall,
             "session_id": self.session_id,
             "started_at": self.started_at.isoformat() if self.started_at else None,
-            "network": asdict(self.network.selected) if self.network.selected else None,
+            "network": self.get_network_context(),
             "network_candidates": [asdict(item) for item in self.network.candidates],
             "workers": worker_states,
             "tools": self.tools.statuses,
