@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
-
 from campus_ops.agent_plane import AgentRegistry
 from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, Severity
 from campus_ops.policy import ControlAction, PolicyEngine, Role
-
 
 ACTION_MAP: dict[str, ControlAction] = {
     "COLLECT_SNAPSHOT": ControlAction.COLLECT_SNAPSHOT,
@@ -30,11 +27,11 @@ class ResponseEngine:
         *,
         endpoint_id: str,
         action: str,
-        arguments: dict[str, Any] | None = None,
+        arguments: dict[str, object] | None = None,
         role: Role = Role.PLATFORM_ADMINISTRATOR,
         operator: str = "local-console",
         incident_id: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         normalized = action.upper()
         policy_action = ACTION_MAP.get(normalized)
         if policy_action is None:
@@ -74,7 +71,7 @@ class ResponseEngine:
         )
         return job
 
-    async def record_result(self, job: dict[str, Any]) -> None:
+    async def record_result(self, job: dict[str, object]) -> None:
         status = str(job.get("status") or "UNKNOWN")
         await self.bus.publish(
             Event(
