@@ -19,9 +19,31 @@ class VoiceAlertWorker(BaseWorker):
         super().__init__("voice-alert", bus)
         self.session_provider = session_provider
         self.last_spoken: dict[str, float] = {}
+        self._muted_until = 0.0
+
+    def mute_for(self, seconds: int) -> None:
+        seconds = max(1, min(seconds, 24 * 60 * 60))
+        self._muted_until = time.monotonic() + seconds
+        self.health.heartbeat(f"voice muted for {seconds}s")
+
+    def unmute(self) -> None:
+        self._muted_until = 0.0
+        self.health.heartbeat("voice channel ready")
+
+    @property
+    def muted(self) -> bool:
+        return time.monotonic() < self._muted_until
+
+    def status(self) -> dict[str, object]:
+        remaining = max(0, int(self._muted_until - time.monotonic()))
+        return {
+            "available": os.name == "nt",
+            "muted": self.muted,
+            "mute_remaining_seconds": remaining,
+        }
 
     async def _speak(self, text: str, critical: bool = False) -> None:
-        if os.name != "nt":
+        if os.name != "nt" or self.muted:
             return
         safe = text.replace("'", "''")[:300]
         script = (
@@ -78,8 +100,10 @@ class VoiceAlertWorker(BaseWorker):
                     if now - self.last_spoken.get(key, 0.0) >= 10:
                         self.last_spoken[key] = now
                         await self._speak(text, critical=critical)
-                self.health.heartbeat(
-                    "voice channel ready" if os.name == "nt" else "voice unavailable on this OS"
-                )
+                if os.name == "nt":
+                    detail = "voice muted" if self.muted else "voice channel ready"
+                else:
+                    detail = "voice unavailable on this OS"
+                self.health.heartbeat(detail)
         finally:
             await self.bus.unsubscribe(self.name)
