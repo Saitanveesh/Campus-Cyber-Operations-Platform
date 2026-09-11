@@ -55,6 +55,10 @@ class IntelligenceWorker(BaseWorker):
         self.state = state
         self.session_provider = session_provider
         self.network_provider = network_provider
+        self._metric_session: str | None = None
+        self._reset_tcp_metrics()
+
+    def _reset_tcp_metrics(self) -> None:
         self._rtt_samples = 0
         self._rtt_sum_ms = 0.0
         self._tcp_packets = 0
@@ -96,6 +100,9 @@ class IntelligenceWorker(BaseWorker):
                 session_id = self.session_provider()
                 if not session_id or event.session_id != session_id:
                     continue
+                if self._metric_session != session_id:
+                    self._metric_session = session_id
+                    self._reset_tcp_metrics()
                 if event.kind != EventKind.OBSERVATION or event.payload.get("type") != "PACKET":
                     continue
 
