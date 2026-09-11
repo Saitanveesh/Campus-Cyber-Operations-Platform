@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+from collections import deque
+from datetime import UTC, datetime
+from threading import RLock
+from typing import Any
+
+from campus_ops.models import Event, Severity
+
+
+class LiveState:
+    """Authoritative current-session-only live state."""
+
+    def __init__(self, max_events: int = 1000, max_alerts: int = 500) -> None:
+        self._lock = RLock()
+        self.session_id: str | None = None
+        self.session_started_at: datetime | None = None
+        self.network_fingerprint: str | None = None
+        self.visibility_mode = "HOST_ACCESS_PORT"
+        self.metrics: dict[str, Any] = {}
+        self.protocols: dict[str, int] = {}
+        self.assets: dict[str, dict[str, Any]] = {}
+        self.flows: dict[str, dict[str, Any]] = {}
+        self.topology_edges: dict[str, dict[str, Any]] = {}
+        self.events: deque[dict[str, Any]] = deque(maxlen=max_events)
+        self.alerts: deque[dict[str, Any]] = deque(maxlen=max_alerts)
+        self.incidents: dict[str, dict[str, Any]] = {}
+        self.capture: dict[str, Any] = {}
+        self.close_session()
+
+    def start_session(self, session_id: str, fingerprint: str | None = None) -> None:
+        with self._lock:
+            self.session_id = session_id
+            self.session_started_at = datetime.now(UTC)
+            self.network_fingerprint = fingerprint
+            self.metrics.clear()
+            self.protocols.clear()
+            self.assets.clear()
+            self.flows.clear()
+            self.topology_edges.clear()
+            self.events.clear()
+            self.alerts.clear()
+            self.incidents.clear()
+            self.capture = {
+                "state": "STARTING",
+                "interface": None,
+                "backend": None,
+                "packets": 0,
+                "bytes": 0,
+                "last_packet_at": None,
+                "detail": "new live session",
+            }
+
+    def close_session(self) -> None:
+        with self._lock:
+            self.session_id = None
+            self.session_started_at = None
+            self.network_fingerprint = None
+            self.metrics.clear()
+            self.protocols.clear()
+            self.assets.clear()
+            self.flows.clear()
+            self.topology_edges.clear()
+            self.events.clear()
+            self.alerts.clear()
+            self.incidents.clear()
+            self.capture = {
+                "state": "UNAVAILABLE",
+                "interface": None,
+                "backend": None,
+                "packets": 0,
+                "bytes": 0,
+                "last_packet_at": None,
+                "detail": "no active session",
+            }
+
+    def ingest_event(self, event: Event) -> bool:
+        with self._lock:
+            if self.session_id is None or event.session_id != self.session_id:
+                return False
+            item = {
+                "event_id": event.event_id,
+                "timestamp": event.timestamp.isoformat(),
+                "source": event.source,
+                "kind": event.kind.value,
+                "severity": event.severity.value,
+                "evidence_class": event.evidence_class,
+                "payload": dict(event.payload),
+            }
+            self.events.appendleft(item)
+            if event.severity in {Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL}:
+                self.alerts.appendleft(item)
+            return True
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "session_id": self.session_id,
+                "session_started_at": self.session_started_at.isoformat() if self.session_started_at else None,
+                "network_fingerprint": self.network_fingerprint,
+                "visibility_mode": self.visibility_mode,
+                "capture": dict(self.capture),
+                "metrics": dict(self.metrics),
+                "protocols": dict(self.protocols),
+                "assets": list(self.assets.values()),
+                "flows": list(self.flows.values()),
+                "topology_edges": list(self.topology_edges.values()),
+                "events": list(self.events),
+                "alerts": list(self.alerts),
+                "incidents": list(self.incidents.values()),
+            }
+
+    def set_capture(self, **values: Any) -> None:
+        with self._lock:
+            self.capture.update(values)
+
+    def update_metrics(self, **values: Any) -> None:
+        with self._lock:
+            self.metrics.update(values)
+
+    def increment_protocol(self, protocol: str, amount: int = 1) -> None:
+        with self._lock:
+            self.protocols[protocol] = self.protocols.get(protocol, 0) + amount
