@@ -29,6 +29,7 @@ from campus_ops.workers.intelligence import IntelligenceWorker
 from campus_ops.workers.local_host import LocalHostTelemetryWorker
 from campus_ops.workers.malware import MalwareAnalysisWorker
 from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
+from campus_ops.workers.pipeline_health import PipelineHealthWorker
 from campus_ops.workers.service_intelligence import ServiceIntelligenceWorker
 from campus_ops.workers.stale_cleanup import StaleCleanupWorker
 from campus_ops.workers.state_sink import StateSinkWorker
@@ -123,6 +124,7 @@ class Orchestrator:
             self.state,
             self.get_session_id,
         )
+        self.pipeline_health = PipelineHealthWorker(self.bus, self.state)
         self.capture = CaptureWorker(
             self.bus,
             self.state,
@@ -156,6 +158,7 @@ class Orchestrator:
             self.local_host,
             self.stale_cleanup,
             self.capture_health,
+            self.pipeline_health,
             self.voice,
             self.tools,
             self.network,
