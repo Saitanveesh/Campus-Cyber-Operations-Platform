@@ -10,8 +10,8 @@ from uuid import uuid4
 
 from campus_ops.config import DEFAULT_SETTINGS, Settings
 from campus_ops.control import EndpointControl
-from campus_ops.evidence import EvidenceExporter
 from campus_ops.event_bus import EventBus, Subscription
+from campus_ops.evidence import EvidenceExporter
 from campus_ops.models import Event, EventKind, Severity, WorkerState
 from campus_ops.state import LiveState
 from campus_ops.workers.application_intelligence import ApplicationIntelligenceWorker
