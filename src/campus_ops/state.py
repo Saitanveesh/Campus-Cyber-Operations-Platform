@@ -11,7 +11,7 @@ from campus_ops.models import Event, Severity
 class LiveState:
     """Authoritative current-session-only live state."""
 
-    def __init__(self, max_events: int = 1000, max_alerts: int = 500) -> None:
+    def __init__(self, max_events: int = 1000, max_alerts: int = 500, max_packets: int = 300) -> None:
         self._lock = RLock()
         self.session_id: str | None = None
         self.session_started_at: datetime | None = None
@@ -23,6 +23,7 @@ class LiveState:
         self.flows: dict[str, dict[str, Any]] = {}
         self.topology_edges: dict[str, dict[str, Any]] = {}
         self.events: deque[dict[str, Any]] = deque(maxlen=max_events)
+        self.packet_feed: deque[dict[str, Any]] = deque(maxlen=max_packets)
         self.alerts: deque[dict[str, Any]] = deque(maxlen=max_alerts)
         self.incidents: dict[str, dict[str, Any]] = {}
         self.capture: dict[str, Any] = {}
@@ -39,6 +40,7 @@ class LiveState:
             self.flows.clear()
             self.topology_edges.clear()
             self.events.clear()
+            self.packet_feed.clear()
             self.alerts.clear()
             self.incidents.clear()
             self.capture = {
@@ -62,6 +64,7 @@ class LiveState:
             self.flows.clear()
             self.topology_edges.clear()
             self.events.clear()
+            self.packet_feed.clear()
             self.alerts.clear()
             self.incidents.clear()
             self.capture = {
@@ -74,20 +77,27 @@ class LiveState:
                 "detail": "no active session",
             }
 
+    @staticmethod
+    def _event_item(event: Event) -> dict[str, Any]:
+        return {
+            "event_id": event.event_id,
+            "timestamp": event.timestamp.isoformat(),
+            "source": event.source,
+            "kind": event.kind.value,
+            "severity": event.severity.value,
+            "evidence_class": event.evidence_class,
+            "payload": dict(event.payload),
+        }
+
     def ingest_event(self, event: Event) -> bool:
         with self._lock:
             if self.session_id is None or event.session_id != self.session_id:
                 return False
-            item = {
-                "event_id": event.event_id,
-                "timestamp": event.timestamp.isoformat(),
-                "source": event.source,
-                "kind": event.kind.value,
-                "severity": event.severity.value,
-                "evidence_class": event.evidence_class,
-                "payload": dict(event.payload),
-            }
-            self.events.appendleft(item)
+            item = self._event_item(event)
+            if event.payload.get("type") == "PACKET":
+                self.packet_feed.appendleft(item)
+            elif event.payload.get("type") != "PERFORMANCE":
+                self.events.appendleft(item)
             if event.severity in {Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL}:
                 self.alerts.appendleft(item)
             return True
@@ -106,6 +116,7 @@ class LiveState:
                 "flows": list(self.flows.values()),
                 "topology_edges": list(self.topology_edges.values()),
                 "events": list(self.events),
+                "packet_feed": list(self.packet_feed),
                 "alerts": list(self.alerts),
                 "incidents": list(self.incidents.values()),
             }
@@ -153,7 +164,17 @@ class LiveState:
             if self.session_id is not None:
                 self.topology_edges[key] = dict(value)
 
+    def get_incident(self, incident_id: str | None) -> dict[str, Any]:
+        with self._lock:
+            if not incident_id:
+                return {}
+            return dict(self.incidents.get(incident_id, {}))
+
     def add_incident(self, incident_id: str, value: dict[str, Any]) -> None:
         with self._lock:
             if self.session_id is not None:
                 self.incidents[incident_id] = dict(value)
+
+    def incident_count(self) -> int:
+        with self._lock:
+            return len(self.incidents)
