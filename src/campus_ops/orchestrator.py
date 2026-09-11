@@ -25,11 +25,14 @@ from campus_ops.workers.intelligence import IntelligenceWorker
 from campus_ops.workers.local_host import LocalHostTelemetryWorker
 from campus_ops.workers.malware import MalwareAnalysisWorker
 from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
+from campus_ops.workers.service_intelligence import ServiceIntelligenceWorker
+from campus_ops.workers.stale_cleanup import StaleCleanupWorker
 from campus_ops.workers.state_sink import StateSinkWorker
 from campus_ops.workers.suricata_feed import SuricataFeedWorker
 from campus_ops.workers.tcp_intelligence import TcpIntelligenceWorker
 from campus_ops.workers.telemetry import TelemetryWorker
 from campus_ops.workers.tool_probe import ToolProbeWorker
+from campus_ops.workers.traffic_baseline import TrafficBaselineWorker
 from campus_ops.workers.voice import VoiceAlertWorker
 
 
@@ -66,6 +69,11 @@ class Orchestrator:
             self.state,
             self.get_session_id,
         )
+        self.service_intelligence = ServiceIntelligenceWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
         self.tcp_intelligence = TcpIntelligenceWorker(
             self.bus,
             self.state,
@@ -74,6 +82,11 @@ class Orchestrator:
         self.arp_guard = ArpGuardWorker(self.bus, self.get_session_id)
         self.detection = BehaviourDetectionWorker(self.bus, self.state, self.get_session_id)
         self.dos_warning = DosEarlyWarningWorker(self.bus, self.get_session_id)
+        self.traffic_baseline = TrafficBaselineWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
         self.incidents = IncidentCorrelationWorker(self.bus, self.state, self.get_session_id)
         self.suricata = SuricataFeedWorker(self.bus, self.get_session_id)
         self.malware = MalwareAnalysisWorker(self.bus, self.get_session_id)
@@ -85,6 +98,11 @@ class Orchestrator:
             interval=1.0,
         )
         self.local_host = LocalHostTelemetryWorker(self.bus, self.state, interval=3.0)
+        self.stale_cleanup = StaleCleanupWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
         self.capture = CaptureWorker(
             self.bus,
             self.state,
@@ -103,15 +121,18 @@ class Orchestrator:
             self.history,
             self.intelligence,
             self.application_intelligence,
+            self.service_intelligence,
             self.tcp_intelligence,
             self.arp_guard,
             self.detection,
             self.dos_warning,
+            self.traffic_baseline,
             self.incidents,
             self.suricata,
             self.malware,
             self.telemetry,
             self.local_host,
+            self.stale_cleanup,
             self.voice,
             self.tools,
             self.network,
