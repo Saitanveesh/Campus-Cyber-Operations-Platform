@@ -79,7 +79,7 @@ FALLBACK_FIELDS = (
 
 
 class CaptureWorker(BaseWorker):
-    """Passive live packet metadata capture through TShark/Npcap."""
+    """Passive packet metadata capture through TShark/Npcap, hard-bound to one live session."""
 
     def __init__(self, bus: EventBus, state: LiveState, session_provider, interface_provider) -> None:
         super().__init__("capture", bus)
@@ -87,11 +87,23 @@ class CaptureWorker(BaseWorker):
         self.session_provider = session_provider
         self.interface_provider = interface_provider
         self._process: asyncio.subprocess.Process | None = None
+        self._bound: tuple[str, str] | None = None
         self.active_fields: tuple[str, ...] = FALLBACK_FIELDS
 
+    async def _stop_process(self) -> None:
+        process = self._process
+        self._process = None
+        self._bound = None
+        if process and process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=3.0)
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+
     async def stop(self) -> None:
-        if self._process and self._process.returncode is None:
-            self._process.terminate()
+        await self._stop_process()
         await super().stop()
 
     async def _resolve_interface(self, tshark: str, requested: str) -> str:
@@ -104,9 +116,21 @@ class CaptureWorker(BaseWorker):
         stdout, _ = await process.communicate()
         text = stdout.decode(errors="replace")
         requested_lower = requested.lower()
+        exact_candidates: list[str] = []
+        fuzzy_candidates: list[str] = []
         for line in text.splitlines():
-            if requested_lower in line.lower():
-                return line.split(".", 1)[0].strip()
+            if "." not in line:
+                continue
+            index = line.split(".", 1)[0].strip()
+            lowered = line.lower()
+            if f"({requested_lower})" in lowered:
+                exact_candidates.append(index)
+            elif requested_lower in lowered:
+                fuzzy_candidates.append(index)
+        if exact_candidates:
+            return exact_candidates[0]
+        if fuzzy_candidates:
+            return fuzzy_candidates[0]
         return requested
 
     async def _discover_fields(self, tshark: str) -> tuple[str, ...]:
@@ -125,7 +149,6 @@ class CaptureWorker(BaseWorker):
             return FALLBACK_FIELDS
         if process.returncode != 0:
             return FALLBACK_FIELDS
-
         supported: set[str] = set()
         for line in stdout.decode(errors="replace").splitlines():
             parts = line.split("\t")
@@ -151,18 +174,54 @@ class CaptureWorker(BaseWorker):
             await asyncio.sleep(3)
         return None
 
+    async def _start_capture(self, tshark: str, interface: str, session_id: str) -> None:
+        await self._stop_process()
+        capture_interface = await self._resolve_interface(tshark, interface)
+        command = [
+            tshark,
+            "-l",
+            "-n",
+            "-i",
+            capture_interface,
+            "-T",
+            "fields",
+            "-E",
+            "separator=\t",
+            "-E",
+            "occurrence=f",
+        ]
+        for field in self.active_fields:
+            command.extend(["-e", field])
+        self._process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        self._bound = (session_id, interface)
+        self.health.state = WorkerState.HEALTHY
+        self.state.set_capture(
+            state="ACTIVE",
+            interface=interface,
+            capture_device=capture_interface,
+            capture_session_id=session_id,
+            backend="tshark",
+            process_pid=self._process.pid,
+            started_at=dt.datetime.now(dt.UTC).isoformat(),
+            decoder_fields=len(self.active_fields),
+            detail=f"capturing on {interface}",
+        )
+
     async def run(self) -> None:
         tshark = await self._wait_for_tshark()
         if not tshark:
             return
-
         self.active_fields = await self._discover_fields(tshark)
         self.health.state = WorkerState.HEALTHY
-        bound_interface: str | None = None
         while not self.stopping:
             interface = self.interface_provider()
             session_id = self.session_provider()
             if not interface or not session_id:
+                await self._stop_process()
                 self.state.set_capture(
                     state="WAITING",
                     interface=interface,
@@ -173,45 +232,17 @@ class CaptureWorker(BaseWorker):
                 await asyncio.sleep(1)
                 continue
 
-            if bound_interface != interface or self._process is None or self._process.returncode is not None:
-                if self._process and self._process.returncode is None:
-                    self._process.terminate()
-                    await self._process.wait()
-                capture_interface = await self._resolve_interface(tshark, interface)
-                command = [
-                    tshark,
-                    "-l",
-                    "-n",
-                    "-i",
-                    capture_interface,
-                    "-T",
-                    "fields",
-                    "-E",
-                    "separator=\t",
-                    "-E",
-                    "occurrence=f",
-                ]
-                for field in self.active_fields:
-                    command.extend(["-e", field])
-                self._process = await asyncio.create_subprocess_exec(
-                    *command,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                bound_interface = interface
-                self.health.state = WorkerState.HEALTHY
-                self.state.set_capture(
-                    state="ACTIVE",
-                    interface=interface,
-                    backend="tshark",
-                    decoder_fields=len(self.active_fields),
-                    detail=f"capturing on {interface}",
-                )
+            binding = (session_id, interface)
+            if self._bound != binding or self._process is None or self._process.returncode is not None:
+                await self._start_capture(tshark, interface, session_id)
 
-            assert self._process.stdout is not None
+            process = self._process
+            assert process is not None and process.stdout is not None
             try:
-                raw = await asyncio.wait_for(self._process.stdout.readline(), timeout=2.0)
+                raw = await asyncio.wait_for(process.stdout.readline(), timeout=2.0)
             except TimeoutError:
+                if self._bound != (self.session_provider(), self.interface_provider()):
+                    continue
                 self.state.set_capture(
                     state="LINK_UP_IDLE",
                     interface=interface,
@@ -221,11 +252,15 @@ class CaptureWorker(BaseWorker):
                 )
                 self.health.heartbeat(f"capture healthy on {interface}; idle")
                 continue
+
+            if self._bound != (self.session_provider(), self.interface_provider()):
+                await self._stop_process()
+                continue
             if not raw:
-                code = await self._process.wait()
+                code = await process.wait()
                 stderr_text = ""
-                if self._process.stderr is not None:
-                    stderr = await self._process.stderr.read()
+                if process.stderr is not None:
+                    stderr = await process.stderr.read()
                     stderr_text = stderr.decode(errors="replace").strip()[-300:]
                 detail = f"TShark exited with code {code}"
                 if stderr_text:
@@ -234,6 +269,7 @@ class CaptureWorker(BaseWorker):
                 self.health.state = WorkerState.DEGRADED
                 self.health.heartbeat(detail)
                 self._process = None
+                self._bound = None
                 await asyncio.sleep(2)
                 continue
 
@@ -262,7 +298,6 @@ class CaptureWorker(BaseWorker):
                 decoder_fields=len(self.active_fields),
                 detail=f"capturing on {interface}",
             )
-            self.state.increment_protocol(protocol)
             await self.bus.publish(
                 Event(
                     source=self.name,
