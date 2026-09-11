@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+import datetime as dt
 
 from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, WorkerState
 from campus_ops.state import LiveState
 from campus_ops.tooling.registry import resolve_executable
 from campus_ops.workers.base import BaseWorker
-
 
 FIELDS = (
     "frame.len",
@@ -190,7 +189,7 @@ class CaptureWorker(BaseWorker):
             self.state.set_capture(
                 packets=int(capture.get("packets", 0)) + 1,
                 bytes=int(capture.get("bytes", 0)) + length,
-                last_packet_at=datetime.now(UTC).isoformat(),
+                last_packet_at=dt.datetime.now(dt.UTC).isoformat(),
                 state="ACTIVE",
                 detail=f"capturing on {interface}",
             )
