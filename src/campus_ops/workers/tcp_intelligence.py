@@ -34,6 +34,8 @@ class TcpIntelligenceWorker(BaseWorker):
         self._rst = 0
         self._retransmissions = 0
         self._duplicate_acks = 0
+        self._lost_segments = 0
+        self._out_of_order = 0
         self._rtt_ms: deque[float] = deque(maxlen=1000)
         self._last_publish = 0.0
 
@@ -46,11 +48,14 @@ class TcpIntelligenceWorker(BaseWorker):
         self._rst = 0
         self._retransmissions = 0
         self._duplicate_acks = 0
+        self._lost_segments = 0
+        self._out_of_order = 0
         self._rtt_ms.clear()
         self._last_publish = 0.0
 
     def _publish_metrics(self) -> None:
         average_rtt = sum(self._rtt_ms) / len(self._rtt_ms) if self._rtt_ms else None
+        denominator = max(self._packets, 1)
         self.state.update_metrics(
             tcp_packets=self._packets,
             tcp_syn=self._syn,
@@ -59,6 +64,10 @@ class TcpIntelligenceWorker(BaseWorker):
             tcp_rst=self._rst,
             tcp_retransmissions=self._retransmissions,
             tcp_duplicate_acks=self._duplicate_acks,
+            tcp_lost_segments=self._lost_segments,
+            tcp_out_of_order=self._out_of_order,
+            tcp_retransmission_rate=round(self._retransmissions / denominator, 5),
+            tcp_reset_rate=round(self._rst / denominator, 5),
             tcp_avg_rtt_ms=round(average_rtt, 3) if average_rtt is not None else None,
         )
 
@@ -93,6 +102,10 @@ class TcpIntelligenceWorker(BaseWorker):
                     self._retransmissions += 1
                 if payload.get("tcp_duplicate_ack"):
                     self._duplicate_acks += 1
+                if payload.get("tcp_lost_segment"):
+                    self._lost_segments += 1
+                if payload.get("tcp_out_of_order"):
+                    self._out_of_order += 1
                 raw_rtt = payload.get("tcp_ack_rtt")
                 if raw_rtt not in {None, ""}:
                     try:
