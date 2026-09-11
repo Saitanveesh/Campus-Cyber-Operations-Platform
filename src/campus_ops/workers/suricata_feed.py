@@ -9,21 +9,26 @@ from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, Severity, WorkerState
 from campus_ops.workers.base import BaseWorker
 
-
 SEVERITY_MAP = {1: Severity.CRITICAL, 2: Severity.HIGH, 3: Severity.MEDIUM}
 
 
 def default_eve_paths() -> list[Path]:
     candidates: list[Path] = []
-    program_files = os.environ.get("ProgramFiles")
-    if program_files:
-        candidates.append(Path(program_files) / "Suricata" / "log" / "eve.json")
-    candidates.extend([Path("C:/Program Files/Suricata/log/eve.json"), Path("C:/ProgramData/Suricata/log/eve.json")])
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+        root = os.environ.get(env_name)
+        if root:
+            candidates.append(Path(root) / "Suricata" / "log" / "eve.json")
+    candidates.extend(
+        [
+            Path(r"C:\Program Files\Suricata\log\eve.json"),
+            Path(r"C:\ProgramData\Suricata\log\eve.json"),
+        ]
+    )
     return candidates
 
 
 class SuricataFeedWorker(BaseWorker):
-    """Consumes Suricata EVE alerts when a local Suricata deployment is available."""
+    """Consume Suricata EVE alerts when a local Suricata deployment is available."""
 
     def __init__(self, bus: EventBus, session_provider, paths: list[Path] | None = None) -> None:
         super().__init__("suricata-feed", bus)
@@ -42,6 +47,7 @@ class SuricataFeedWorker(BaseWorker):
                 self.health.heartbeat("Suricata EVE feed unavailable")
                 await asyncio.sleep(5)
                 continue
+
             self.health.state = WorkerState.HEALTHY
             offset = self._offsets.get(path, path.stat().st_size)
             with path.open("r", encoding="utf-8", errors="replace") as handle:
@@ -60,7 +66,10 @@ class SuricataFeedWorker(BaseWorker):
                         record = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if record.get("event_type") != "alert" or not isinstance(record.get("alert"), dict):
+                    if record.get("event_type") != "alert" or not isinstance(
+                        record.get("alert"),
+                        dict,
+                    ):
                         continue
                     session_id = self.session_provider()
                     if not session_id:
