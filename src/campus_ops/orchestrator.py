@@ -17,6 +17,7 @@ from campus_ops.workers.detection import BehaviourDetectionWorker
 from campus_ops.workers.history import HistoryWorker
 from campus_ops.workers.incidents import IncidentCorrelationWorker
 from campus_ops.workers.intelligence import IntelligenceWorker
+from campus_ops.workers.malware import MalwareAnalysisWorker
 from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
 from campus_ops.workers.state_sink import StateSinkWorker
 from campus_ops.workers.suricata_feed import SuricataFeedWorker
@@ -47,6 +48,7 @@ class Orchestrator:
         self.detection = BehaviourDetectionWorker(self.bus, self.state, self.get_session_id)
         self.incidents = IncidentCorrelationWorker(self.bus, self.state, self.get_session_id)
         self.suricata = SuricataFeedWorker(self.bus, self.get_session_id)
+        self.malware = MalwareAnalysisWorker(self.bus, self.get_session_id)
         self.telemetry = TelemetryWorker(
             self.bus,
             self.state,
@@ -69,6 +71,7 @@ class Orchestrator:
             self.detection,
             self.incidents,
             self.suricata,
+            self.malware,
             self.telemetry,
             self.voice,
             self.tools,
