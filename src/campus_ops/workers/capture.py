@@ -12,21 +12,34 @@ from campus_ops.workers.base import BaseWorker
 
 FIELDS = (
     "frame.len",
+    "frame.protocols",
     "eth.src",
     "eth.dst",
+    "vlan.id",
     "ip.src",
     "ip.dst",
+    "ip.ttl",
     "ipv6.src",
     "ipv6.dst",
+    "ipv6.hlim",
     "arp.src.proto_ipv4",
     "tcp.srcport",
     "tcp.dstport",
+    "tcp.flags",
+    "tcp.window_size_value",
+    "tcp.analysis.ack_rtt",
+    "tcp.analysis.retransmission",
+    "tcp.analysis.fast_retransmission",
+    "tcp.analysis.duplicate_ack",
     "udp.srcport",
     "udp.dstport",
+    "icmp.type",
+    "icmpv6.type",
     "_ws.col.Protocol",
     "dns.qry.name",
     "tls.handshake.extensions_server_name",
-    "tcp.flags",
+    "http.host",
+    "dhcp.option.hostname",
 )
 
 
@@ -109,7 +122,7 @@ class CaptureWorker(BaseWorker):
                 self._process = await asyncio.create_subprocess_exec(
                     *command,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
                 )
                 bound_interface = interface
                 self.health.state = WorkerState.HEALTHY
@@ -117,14 +130,20 @@ class CaptureWorker(BaseWorker):
                     state="ACTIVE",
                     interface=interface,
                     backend="tshark",
-                    detail="passive metadata capture active",
+                    detail="passive packet metadata capture active",
                 )
 
             assert self._process.stdout is not None
             try:
                 raw = await asyncio.wait_for(self._process.stdout.readline(), timeout=2.0)
             except TimeoutError:
-                self.health.heartbeat(f"capture active on {interface}; no packet in last 2s")
+                self.state.set_capture(
+                    state="LINK_UP_IDLE",
+                    interface=interface,
+                    backend="tshark",
+                    detail="capture process healthy; no packet observed in last 2s",
+                )
+                self.health.heartbeat(f"capture process healthy on {interface}; link idle")
                 continue
             if not raw:
                 code = await self._process.wait()
@@ -155,6 +174,7 @@ class CaptureWorker(BaseWorker):
                 bytes=int(capture.get("bytes", 0)) + length,
                 last_packet_at=datetime.now(UTC).isoformat(),
                 state="ACTIVE",
+                detail="passive packet metadata capture active",
             )
             self.state.increment_protocol(protocol)
             await self.bus.publish(
@@ -167,16 +187,28 @@ class CaptureWorker(BaseWorker):
                         "type": "PACKET",
                         "length": length,
                         "protocol": protocol,
+                        "protocol_stack": packet["frame.protocols"],
                         "transport": transport,
                         "eth_src": packet["eth.src"],
                         "eth_dst": packet["eth.dst"],
+                        "vlan_id": packet["vlan.id"],
                         "src_ip": src_ip,
                         "dst_ip": dst_ip,
+                        "ip_ttl": packet["ip.ttl"],
+                        "ipv6_hop_limit": packet["ipv6.hlim"],
                         "src_port": src_port,
                         "dst_port": dst_port,
                         "dns_query": packet["dns.qry.name"],
                         "tls_sni": packet["tls.handshake.extensions_server_name"],
+                        "http_host": packet["http.host"],
+                        "dhcp_hostname": packet["dhcp.option.hostname"],
                         "tcp_flags": packet["tcp.flags"],
+                        "tcp_window": packet["tcp.window_size_value"],
+                        "tcp_ack_rtt": packet["tcp.analysis.ack_rtt"],
+                        "tcp_retransmission": bool(packet["tcp.analysis.retransmission"]),
+                        "tcp_fast_retransmission": bool(packet["tcp.analysis.fast_retransmission"]),
+                        "tcp_duplicate_ack": bool(packet["tcp.analysis.duplicate_ack"]),
+                        "icmp_type": packet["icmp.type"] or packet["icmpv6.type"],
                     },
                 )
             )
