@@ -2,7 +2,8 @@ from campus_ops.config import Settings
 from campus_ops.orchestrator import Orchestrator
 
 
-def test_snapshot_has_full_worker_fabric_before_start():
+def test_snapshot_has_full_worker_fabric_before_start(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     orch = Orchestrator(Settings())
     snapshot = orch.snapshot()
     assert snapshot["session_id"] is None
@@ -17,6 +18,7 @@ def test_snapshot_has_full_worker_fabric_before_start():
         "flow-engine",
         "topology-engine",
         "identity-engine",
+        "endpoint-identity",
         "application-intelligence",
         "dns-intelligence",
         "service-intelligence",
@@ -25,7 +27,9 @@ def test_snapshot_has_full_worker_fabric_before_start():
         "arp-guard",
         "behaviour-detection",
         "dos-early-warning",
+        "threat-engine",
         "traffic-baseline",
+        "performance-engine",
         "incident-correlation",
         "risk-graph",
         "attack-timeline",
