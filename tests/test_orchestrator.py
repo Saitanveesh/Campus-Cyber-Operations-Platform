@@ -46,6 +46,7 @@ def test_snapshot_has_full_worker_fabric_before_start(tmp_path, monkeypatch):
         "pipeline-health",
         "job-scheduler",
         "voice-alert",
+        "operations-watchdog",
         "tool-probe",
         "network-discovery",
         "capture",
@@ -54,3 +55,4 @@ def test_snapshot_has_full_worker_fabric_before_start(tmp_path, monkeypatch):
     assert workers == expected
     assert snapshot["managed_agents"] == []
     assert snapshot["response_jobs"] == []
+    assert snapshot["watchdog"]["state"] == "STOPPED"
