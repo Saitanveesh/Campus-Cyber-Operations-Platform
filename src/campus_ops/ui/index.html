@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Campus Cyber Operations Platform</title>
+<style>
+:root{--bg:#fff;--ink:#050505;--muted:#676767;--line:#c8c8c8;--soft:#f4f4f4}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Arial,Helvetica,sans-serif}
+header{height:92px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 40px}
+.brand{font-weight:900;letter-spacing:.05em;text-transform:uppercase}.meta{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+main{padding:38px 40px 80px}.hero{display:grid;grid-template-columns:1.5fr 1fr;border-bottom:1px solid var(--line);padding-bottom:38px}
+h1{font-size:clamp(44px,6vw,92px);line-height:.92;margin:0;text-transform:uppercase;letter-spacing:-.04em}.state{align-self:end;text-align:right}
+.state strong{display:block;font-size:32px}.state span{font-size:12px;letter-spacing:.14em;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);border-left:1px solid var(--line);margin-top:36px}
+.card{min-height:170px;padding:24px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.label{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+.value{font-size:30px;font-weight:800;margin-top:20px;word-break:break-word}.small{font-size:13px;line-height:1.5;color:#333;margin-top:14px}
+section{margin-top:42px}h2{font-size:13px;letter-spacing:.22em;text-transform:uppercase;font-weight:700;margin:0 0 16px}
+table{width:100%;border-collapse:collapse}th,td{border-top:1px solid var(--line);padding:14px 10px;text-align:left;font-size:13px}th{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+@media(max-width:900px){.grid{grid-template-columns:1fr 1fr}.hero{grid-template-columns:1fr}.state{text-align:left;margin-top:28px}}@media(max-width:560px){header,main{padding-left:18px;padding-right:18px}.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><div class="brand">Campus Cyber Operations Platform</div><div class="meta">Foundation / v0.1</div></header>
+<main>
+<div class="hero"><h1>Live Operations<br>Console</h1><div class="state"><span>Platform State</span><strong id="overall">STARTING</strong></div></div>
+<div class="grid">
+<div class="card"><div class="label">Live Contract</div><div class="value" id="contract">—</div><div class="small">Historical records never substitute live telemetry.</div></div>
+<div class="card"><div class="label">Selected Interface</div><div class="value" id="iface">—</div><div class="small" id="ip">Awaiting interface election.</div></div>
+<div class="card"><div class="label">Session</div><div class="value" id="session">—</div><div class="small">One current live session only.</div></div>
+<div class="card"><div class="label">Tool Coverage</div><div class="value" id="tools">—</div><div class="small">Optional specialist engines are capability adapters.</div></div>
+</div>
+<section><h2>Worker Health</h2><table><thead><tr><th>Worker</th><th>State</th><th>Detail</th><th>Heartbeat</th></tr></thead><tbody id="workers"></tbody></table></section>
+<section><h2>External Tool Fabric</h2><table><thead><tr><th>Tool</th><th>Capability</th><th>Available</th><th>Path</th></tr></thead><tbody id="toolRows"></tbody></table></section>
+<footer>Monochrome operator interface · evidence first · authorized environments only</footer>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+function clearLive(reason){$('overall').textContent='UNAVAILABLE';$('contract').textContent='—';$('iface').textContent='—';$('ip').textContent=reason;$('session').textContent='—';$('tools').textContent='—';$('workers').innerHTML='';$('toolRows').innerHTML=''}
+async function refresh(){try{const r=await fetch('/api/v1/live/status',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();$('overall').textContent=d.overall||'UNKNOWN';$('contract').textContent=d.live_contract||'—';$('session').textContent=d.session_id?d.session_id.slice(0,8):'—';if(d.network){$('iface').textContent=d.network.interface;$('ip').textContent=[...(d.network.ipv4||[]),...(d.network.ipv6||[])].join(' · ')||'No usable address'}else{$('iface').textContent='NONE';$('ip').textContent='No viable interface selected'}const tools=d.tools||[];$('tools').textContent=tools.filter(t=>t.available).length+' / '+tools.length;$('workers').innerHTML=Object.entries(d.workers||{}).map(([n,w])=>`<tr><td>${n}</td><td>${w.state}</td><td>${w.detail||''}</td><td>${w.last_heartbeat||'—'}</td></tr>`).join('');$('toolRows').innerHTML=tools.map(t=>`<tr><td>${t.label}</td><td>${t.purpose}</td><td>${t.available?'YES':'NO'}</td><td>${t.path||'—'}</td></tr>`).join('')}catch(e){clearLive('API unavailable: '+e.message)}}
+refresh();setInterval(refresh,2000);
+</script>
+</body>
+</html>
