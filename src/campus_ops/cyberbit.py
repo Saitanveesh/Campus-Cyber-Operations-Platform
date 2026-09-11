@@ -37,7 +37,7 @@ class CyberbitAdapter:
                 "User-Agent": "CampusCyberOperationsPlatform/0.3",
             },
         )
-        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
+        with urllib.request.urlopen(request, timeout=5) as response:
             raw = response.read().decode("utf-8")
         return json.loads(raw) if raw else {}
 
@@ -52,7 +52,12 @@ class CyberbitAdapter:
             payload = self._request(self.config.health_path)
         except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError) as exc:
             return {"configured": True, "reachable": False, "detail": str(exc)}
-        return {"configured": True, "reachable": True, "detail": "provider responded", "payload": payload}
+        return {
+            "configured": True,
+            "reachable": True,
+            "detail": "provider responded",
+            "payload": payload,
+        }
 
     def hosts(self) -> list[dict[str, Any]]:
         if not self.configured:
