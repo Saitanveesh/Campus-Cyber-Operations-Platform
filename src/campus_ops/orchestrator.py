@@ -15,6 +15,7 @@ from campus_ops.state import LiveState
 from campus_ops.workers.capture import CaptureWorker
 from campus_ops.workers.detection import BehaviourDetectionWorker
 from campus_ops.workers.dos_warning import DosEarlyWarningWorker
+from campus_ops.workers.forensic_capture import ForensicCaptureWorker
 from campus_ops.workers.history import HistoryWorker
 from campus_ops.workers.incidents import IncidentCorrelationWorker
 from campus_ops.workers.intelligence import IntelligenceWorker
@@ -30,7 +31,7 @@ from campus_ops.workers.voice import VoiceAlertWorker
 class Orchestrator:
     """Single authority for worker lifecycle and the current live session."""
 
-    OPTIONAL_DEGRADED_WORKERS = {"suricata-feed"}
+    OPTIONAL_DEGRADED_WORKERS = {"suricata-feed", "forensic-pcap"}
 
     def __init__(self, settings: Settings = DEFAULT_SETTINGS) -> None:
         self.settings = settings
@@ -71,6 +72,11 @@ class Orchestrator:
             self.get_session_id,
             self.get_interface,
         )
+        self.forensic_capture = ForensicCaptureWorker(
+            self.bus,
+            self.get_session_id,
+            self.get_interface,
+        )
         self.voice = VoiceAlertWorker(self.bus, self.get_session_id)
         self.control = EndpointControl(self.bus, self.get_session_id)
         self.workers = [
@@ -87,6 +93,7 @@ class Orchestrator:
             self.tools,
             self.network,
             self.capture,
+            self.forensic_capture,
         ]
         self._session_task: asyncio.Task[None] | None = None
         self._session_sub: Subscription | None = None
@@ -232,5 +239,7 @@ class Orchestrator:
             "tools": self.tools.statuses,
             "event_bus": self.bus.stats(),
             "enrolled_endpoints": self.control.list(),
+            "evidence_root": str(self.forensic_capture.root),
+            "malware_staging": str(self.malware.staging),
             "live": self.state.snapshot(),
         }
