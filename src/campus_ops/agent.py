@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import platform
 import shutil
 import socket
+import subprocess
 import sys
 import time
 import urllib.error
@@ -33,6 +35,52 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _network_addresses() -> list[dict[str, str]]:
+    values: list[dict[str, str]] = []
+    for interface, addresses in psutil.net_if_addrs().items():
+        for address in addresses:
+            if address.family not in {socket.AF_INET, socket.AF_INET6}:
+                continue
+            raw = address.address.split("%", 1)[0]
+            try:
+                ip = ipaddress.ip_address(raw)
+            except ValueError:
+                continue
+            if ip.is_loopback or ip.is_unspecified or ip.is_multicast:
+                continue
+            values.append(
+                {
+                    "interface": interface,
+                    "address": raw,
+                    "netmask": str(address.netmask or ""),
+                }
+            )
+    return values
+
+
+def _services() -> list[dict[str, str]]:
+    if os.name != "nt" or not hasattr(psutil, "win_service_iter"):
+        return []
+    result = []
+    try:
+        for service in psutil.win_service_iter():
+            try:
+                info = service.as_dict()
+            except (psutil.Error, OSError):
+                continue
+            result.append(
+                {
+                    "name": str(info.get("name") or ""),
+                    "display_name": str(info.get("display_name") or ""),
+                    "status": str(info.get("status") or ""),
+                    "start_type": str(info.get("start_type") or ""),
+                }
+            )
+    except (psutil.Error, OSError):
+        return []
+    return result[:500]
+
+
 def collect_telemetry() -> dict[str, Any]:
     disk_root = Path.home().anchor or "/"
     memory = psutil.virtual_memory()
@@ -54,6 +102,7 @@ def collect_telemetry() -> dict[str, Any]:
         )
     processes.sort(key=lambda item: float(item.get("memory_percent") or 0.0), reverse=True)
 
+    connections: list[dict[str, Any]] = []
     connection_counts = {"tcp": 0, "udp": 0, "listen": 0}
     try:
         for conn in psutil.net_connections(kind="inet"):
@@ -63,6 +112,16 @@ def collect_telemetry() -> dict[str, Any]:
                     connection_counts["listen"] += 1
             elif conn.type == socket.SOCK_DGRAM:
                 connection_counts["udp"] += 1
+            if len(connections) < 300:
+                connections.append(
+                    {
+                        "type": "TCP" if conn.type == socket.SOCK_STREAM else "UDP",
+                        "local": f"{conn.laddr.ip}:{conn.laddr.port}" if conn.laddr else "",
+                        "remote": f"{conn.raddr.ip}:{conn.raddr.port}" if conn.raddr else "",
+                        "status": conn.status,
+                        "pid": conn.pid,
+                    }
+                )
     except (psutil.AccessDenied, OSError):
         pass
 
@@ -75,6 +134,9 @@ def collect_telemetry() -> dict[str, Any]:
     return {
         "hostname": socket.gethostname(),
         "platform": platform.platform(),
+        "system": platform.system(),
+        "release": platform.release(),
+        "machine": platform.machine(),
         "python": platform.python_version(),
         "cpu_percent": psutil.cpu_percent(interval=0.1),
         "cpu_count": psutil.cpu_count(),
@@ -86,8 +148,11 @@ def collect_telemetry() -> dict[str, Any]:
         "disk_total": disk.total,
         "boot_time": psutil.boot_time(),
         "users": users,
+        "network_addresses": _network_addresses(),
         "connections": connection_counts,
-        "processes": processes[:100],
+        "connection_sample": connections,
+        "processes": processes[:150],
+        "services": _services(),
     }
 
 
@@ -157,14 +222,10 @@ def _block_remote_ip(arguments: dict[str, Any]) -> dict[str, Any]:
     remote_ip = str(arguments.get("remote_ip") or "").strip()
     if not remote_ip:
         raise ValueError("remote_ip is required")
-    import ipaddress
-
     ipaddress.ip_address(remote_ip)
     if os.name != "nt":
         return {"remote_ip": remote_ip, "state": "UNSUPPORTED_ON_THIS_AGENT"}
     rule_name = f"CampusOps Block {remote_ip}"
-    import subprocess
-
     process = subprocess.run(
         [
             "powershell.exe",
@@ -244,7 +305,11 @@ def run_agent(base_url: str, endpoint_id: str, token: str, interval: float) -> i
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Campus Cyber Operations endpoint agent")
-    parser.add_argument("--server", required=True, help="Console base URL, for example http://10.0.0.10:8765")
+    parser.add_argument(
+        "--server",
+        required=True,
+        help="Console base URL, for example http://10.0.0.10:8765",
+    )
     parser.add_argument("--endpoint-id", required=True)
     parser.add_argument("--token", default=os.environ.get("CAMPUS_OPS_AGENT_TOKEN", ""))
     parser.add_argument("--interval", type=float, default=5.0)
