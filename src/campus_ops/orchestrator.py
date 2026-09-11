@@ -14,6 +14,7 @@ from campus_ops.models import Event, EventKind, Severity, WorkerState
 from campus_ops.state import LiveState
 from campus_ops.workers.capture import CaptureWorker
 from campus_ops.workers.detection import BehaviourDetectionWorker
+from campus_ops.workers.dos_warning import DosEarlyWarningWorker
 from campus_ops.workers.history import HistoryWorker
 from campus_ops.workers.incidents import IncidentCorrelationWorker
 from campus_ops.workers.intelligence import IntelligenceWorker
@@ -53,6 +54,7 @@ class Orchestrator:
             self.get_network_context,
         )
         self.detection = BehaviourDetectionWorker(self.bus, self.state, self.get_session_id)
+        self.dos_warning = DosEarlyWarningWorker(self.bus, self.get_session_id)
         self.incidents = IncidentCorrelationWorker(self.bus, self.state, self.get_session_id)
         self.suricata = SuricataFeedWorker(self.bus, self.get_session_id)
         self.malware = MalwareAnalysisWorker(self.bus, self.get_session_id)
@@ -76,6 +78,7 @@ class Orchestrator:
             self.history,
             self.intelligence,
             self.detection,
+            self.dos_warning,
             self.incidents,
             self.suricata,
             self.malware,
