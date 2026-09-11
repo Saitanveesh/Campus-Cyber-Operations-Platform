@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -12,6 +14,7 @@ from campus_ops.control import EnrolledEndpoint
 from campus_ops.evidence import sha256_file
 from campus_ops.models import Event, EventKind
 from campus_ops.orchestrator import Orchestrator
+from campus_ops.policy import Role
 
 
 class EndpointEnrollRequest(BaseModel):
@@ -35,18 +38,58 @@ class VoiceMuteRequest(BaseModel):
     seconds: int = Field(default=300, ge=1, le=86400)
 
 
+class AgentEnrollRequest(BaseModel):
+    endpoint_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
+    name: str = Field(min_length=1, max_length=128)
+    platform: Literal["windows", "linux", "other"] = "other"
+    host: str = Field(default="", max_length=255)
+
+
+class AgentHeartbeatRequest(BaseModel):
+    host: str = Field(default="", max_length=255)
+    version: str = Field(default="", max_length=64)
+    telemetry: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentJobResultRequest(BaseModel):
+    status: Literal["SUCCEEDED", "FAILED", "REJECTED"]
+    result: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResponseActionRequest(BaseModel):
+    action: Literal["COLLECT_SNAPSHOT", "STOP_PROCESS", "QUARANTINE_FILE", "BLOCK_REMOTE_IP"]
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    role: Role = Role.PLATFORM_ADMINISTRATOR
+    operator: str = Field(default="local-console", min_length=1, max_length=128)
+    incident_id: str | None = Field(default=None, max_length=128)
+
+
+class ScheduledActionRequest(ResponseActionRequest):
+    execute_at: datetime
+
+
+def _bearer(authorization: str | None) -> str:
+    if not authorization:
+        raise HTTPException(status_code=401, detail="missing agent authorization")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=401, detail="invalid agent authorization")
+    return token
+
+
 def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
     orch = orchestrator or Orchestrator()
-    app = FastAPI(title="Campus Cyber Operations Platform", version="0.2.0")
-    app.state.orchestrator = orch
 
-    @app.on_event("startup")
-    async def startup() -> None:
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
         await orch.start()
+        try:
+            yield
+        finally:
+            await orch.stop()
 
-    @app.on_event("shutdown")
-    async def shutdown() -> None:
-        await orch.stop()
+    app = FastAPI(title="Campus Cyber Operations Platform", version="0.3.0", lifespan=lifespan)
+    app.state.orchestrator = orch
 
     @app.get("/api/v1/live/status")
     async def live_status() -> dict[str, object]:
@@ -69,6 +112,7 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
                 "edges": len(live["topology_edges"]),
                 "alerts": len(live["alerts"]),
                 "incidents": len(live["incidents"]),
+                "agents": len(snapshot["managed_agents"]),
             },
             "visibility_mode": live["visibility_mode"],
         }
@@ -103,7 +147,7 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
             "visibility_mode": live["visibility_mode"],
             "assets": live["assets"],
             "edges": live["topology_edges"],
-            "claim": "OBSERVED_LIVE_COMMUNICATION_TOPOLOGY",
+            "risk_graph": live["metrics"].get("risk_graph", {}),
         }
 
     @app.get("/api/v1/live/protocols")
@@ -128,7 +172,12 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
     @app.get("/api/v1/live/incidents")
     async def live_incidents() -> dict[str, object]:
         live = orch.state.snapshot()
-        return {"session_id": live["session_id"], "incidents": live["incidents"]}
+        return {
+            "session_id": live["session_id"],
+            "incidents": live["incidents"],
+            "timeline": live["metrics"].get("attack_timeline", []),
+            "risk_graph": live["metrics"].get("risk_graph", {}),
+        }
 
     @app.post("/api/v1/live/incidents/{incident_id}/action")
     async def incident_action(
@@ -156,8 +205,8 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
                     "action": f"INCIDENT_{request.action.upper()}",
                     "incident_id": incident_id,
                     "status": status,
-                    "message": f"Incident {request.action}d",
-                    "voice": f"Incident {request.action}d.",
+                    "message": f"Incident marked {status.lower()}",
+                    "voice": f"Incident marked {status.lower()}.",
                 },
             )
         )
@@ -201,7 +250,6 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
     async def history_recent(limit: int = Query(default=100, ge=1, le=1000)) -> dict[str, object]:
         return {
             "live_session_id": orch.session_id,
-            "source": "HISTORICAL_ONLY",
             "events": orch.history.query_recent(limit),
         }
 
@@ -223,6 +271,10 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
     @app.get("/api/v1/system/voice")
     async def voice_status() -> dict[str, object]:
         return orch.voice.status()
+
+    @app.post("/api/v1/system/voice/test")
+    async def voice_test() -> dict[str, object]:
+        return await orch.voice.test()
 
     @app.post("/api/v1/system/voice/mute")
     async def voice_mute(request: VoiceMuteRequest) -> dict[str, object]:
@@ -248,10 +300,7 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
 
     @app.get("/api/v1/endpoints")
     async def endpoints() -> dict[str, object]:
-        return {
-            "endpoints": orch.control.list(),
-            "control_scope": "EXPLICITLY_ENROLLED_ONLY",
-        }
+        return {"endpoints": orch.control.list()}
 
     @app.post("/api/v1/endpoints")
     async def enroll_endpoint(request: EndpointEnrollRequest) -> dict[str, object]:
@@ -276,6 +325,158 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
 
+    @app.get("/api/v1/agents")
+    async def agents() -> dict[str, object]:
+        return {"agents": orch.agents.list(), "jobs": orch.agents.jobs(limit=200)}
+
+    @app.post("/api/v1/agents/enroll")
+    async def enroll_agent(request: AgentEnrollRequest) -> dict[str, object]:
+        try:
+            agent = orch.agents.enroll(**request.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"agent": agent, "token_notice": "Save the enrollment token; it is returned once."}
+
+    @app.delete("/api/v1/agents/{endpoint_id}")
+    async def remove_agent(endpoint_id: str) -> dict[str, object]:
+        if not orch.agents.remove(endpoint_id):
+            raise HTTPException(status_code=404, detail="agent not enrolled")
+        return {"removed": endpoint_id}
+
+    @app.post("/api/v1/agents/{endpoint_id}/heartbeat")
+    async def agent_heartbeat(
+        endpoint_id: str,
+        request: AgentHeartbeatRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, object]:
+        token = _bearer(authorization)
+        try:
+            agent = orch.agents.heartbeat(
+                endpoint_id,
+                token,
+                host=request.host,
+                version=request.version,
+                telemetry=request.telemetry,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        await orch.bus.publish(
+            Event(
+                source="endpoint-agent",
+                kind=EventKind.OBSERVATION,
+                session_id=orch.session_id,
+                evidence_class="AUTHENTICATED_ENDPOINT_AGENT",
+                payload={
+                    "type": "ENDPOINT_TELEMETRY",
+                    "endpoint_id": endpoint_id,
+                    "host": request.host,
+                    "version": request.version,
+                    "cpu_percent": request.telemetry.get("cpu_percent"),
+                    "memory_percent": request.telemetry.get("memory_percent"),
+                    "disk_percent": request.telemetry.get("disk_percent"),
+                },
+            )
+        )
+        return {"agent": agent}
+
+    @app.get("/api/v1/agents/{endpoint_id}/jobs")
+    async def agent_jobs(
+        endpoint_id: str,
+        limit: int = Query(default=10, ge=1, le=25),
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, object]:
+        token = _bearer(authorization)
+        try:
+            jobs = orch.agents.claim_jobs(endpoint_id, token, limit)
+        except PermissionError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        return {"jobs": jobs}
+
+    @app.post("/api/v1/agents/{endpoint_id}/jobs/{job_id}/result")
+    async def agent_job_result(
+        endpoint_id: str,
+        job_id: str,
+        request: AgentJobResultRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, object]:
+        token = _bearer(authorization)
+        try:
+            job = orch.agents.report_job(
+                endpoint_id,
+                token,
+                job_id,
+                request.status,
+                request.result,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await orch.response.record_result(job)
+        return {"job": job}
+
+    @app.post("/api/v1/response/{endpoint_id}")
+    async def queue_response(endpoint_id: str, request: ResponseActionRequest) -> dict[str, object]:
+        try:
+            job = await orch.response.queue(
+                endpoint_id=endpoint_id,
+                action=request.action,
+                arguments=request.arguments,
+                role=request.role,
+                operator=request.operator,
+                incident_id=request.incident_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"job": job}
+
+    @app.get("/api/v1/response/jobs")
+    async def response_jobs(limit: int = Query(default=200, ge=1, le=1000)) -> dict[str, object]:
+        return {"jobs": orch.agents.jobs(limit=limit)}
+
+    @app.post("/api/v1/response/schedule/{endpoint_id}")
+    async def schedule_response(
+        endpoint_id: str,
+        request: ScheduledActionRequest,
+    ) -> dict[str, object]:
+        try:
+            item = orch.scheduler.schedule(
+                execute_at=request.execute_at,
+                endpoint_id=endpoint_id,
+                action=request.action,
+                arguments=request.arguments,
+                role=request.role,
+                operator=request.operator,
+                incident_id=request.incident_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"scheduled": item}
+
+    @app.get("/api/v1/response/schedule")
+    async def scheduled_actions(limit: int = Query(default=200, ge=1, le=1000)) -> dict[str, object]:
+        return {"scheduled": orch.scheduler.list(limit)}
+
+    @app.delete("/api/v1/response/schedule/{schedule_id}")
+    async def cancel_scheduled_action(schedule_id: str) -> dict[str, object]:
+        if not orch.scheduler.cancel(schedule_id):
+            raise HTTPException(status_code=404, detail="scheduled action not found or not pending")
+        return {"cancelled": schedule_id}
+
+    @app.get("/api/v1/cyberbit/status")
+    async def cyberbit_status() -> dict[str, object]:
+        return await asyncio.to_thread(orch.cyberbit.status)
+
+    @app.get("/api/v1/cyberbit/hosts")
+    async def cyberbit_hosts() -> dict[str, object]:
+        return {"hosts": await asyncio.to_thread(orch.cyberbit.hosts)}
+
     @app.get("/api/v1/files/status")
     async def file_status() -> dict[str, object]:
         return {
@@ -294,13 +495,7 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
                 stat = path.stat()
             except OSError:
                 continue
-            files.append(
-                {
-                    "name": path.name,
-                    "size": stat.st_size,
-                    "modified_ns": stat.st_mtime_ns,
-                }
-            )
+            files.append({"name": path.name, "size": stat.st_size, "modified_ns": stat.st_mtime_ns})
         return {"root": str(root), "files": files[:100]}
 
     @app.get("/api/v1/evidence/incidents")
