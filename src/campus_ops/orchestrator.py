@@ -26,6 +26,7 @@ from campus_ops.workers.capture_health import CaptureHealthWorker
 from campus_ops.workers.detection import BehaviourDetectionWorker
 from campus_ops.workers.dns_intelligence import DnsIntelligenceWorker
 from campus_ops.workers.dos_warning import DosEarlyWarningWorker
+from campus_ops.workers.endpoint_identity import EndpointIdentityWorker
 from campus_ops.workers.flow_engine import FlowEngineWorker
 from campus_ops.workers.flow_receiver import FlowTelemetryReceiverWorker
 from campus_ops.workers.forensic_capture import ForensicCaptureWorker
@@ -36,6 +37,7 @@ from campus_ops.workers.infrastructure_intelligence import InfrastructureIntelli
 from campus_ops.workers.local_host import LocalHostTelemetryWorker
 from campus_ops.workers.malware import MalwareAnalysisWorker
 from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
+from campus_ops.workers.performance_engine import PerformanceEngineWorker
 from campus_ops.workers.pipeline_health import PipelineHealthWorker
 from campus_ops.workers.protocol_engine import ProtocolEngineWorker
 from campus_ops.workers.response_scheduler import ResponseSchedulerWorker
@@ -48,6 +50,7 @@ from campus_ops.workers.suricata_feed import SuricataFeedWorker
 from campus_ops.workers.syslog_receiver import SyslogReceiverWorker
 from campus_ops.workers.tcp_intelligence import TcpIntelligenceWorker
 from campus_ops.workers.telemetry import TelemetryWorker
+from campus_ops.workers.threat_engine import ThreatEngineWorker
 from campus_ops.workers.tool_probe import ToolProbeWorker
 from campus_ops.workers.topology_engine import TopologyEngineWorker
 from campus_ops.workers.traffic_baseline import TrafficBaselineWorker
@@ -109,6 +112,12 @@ class Orchestrator:
             self.get_network_context,
         )
         self.identity_engine = IdentityEngineWorker(self.bus, self.state, self.get_session_id)
+        self.endpoint_identity = EndpointIdentityWorker(
+            self.bus,
+            self.state,
+            self.agents,
+            self.get_session_id,
+        )
         self.application_intelligence = ApplicationIntelligenceWorker(
             self.bus,
             self.state,
@@ -137,7 +146,13 @@ class Orchestrator:
         self.arp_guard = ArpGuardWorker(self.bus, self.get_session_id)
         self.detection = BehaviourDetectionWorker(self.bus, self.state, self.get_session_id)
         self.dos_warning = DosEarlyWarningWorker(self.bus, self.get_session_id)
+        self.threat_engine = ThreatEngineWorker(self.bus, self.state, self.get_session_id)
         self.traffic_baseline = TrafficBaselineWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.performance_engine = PerformanceEngineWorker(
             self.bus,
             self.state,
             self.get_session_id,
@@ -197,6 +212,7 @@ class Orchestrator:
             self.flow_engine,
             self.topology_engine,
             self.identity_engine,
+            self.endpoint_identity,
             self.application_intelligence,
             self.dns_intelligence,
             self.service_intelligence,
@@ -205,7 +221,9 @@ class Orchestrator:
             self.arp_guard,
             self.detection,
             self.dos_warning,
+            self.threat_engine,
             self.traffic_baseline,
+            self.performance_engine,
             self.incidents,
             self.risk_graph,
             self.attack_timeline,
