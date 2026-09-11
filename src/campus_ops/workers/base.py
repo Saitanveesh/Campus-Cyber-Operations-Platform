@@ -38,7 +38,7 @@ class BaseWorker(ABC):
             await self.run()
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - this is the worker isolation boundary
             self.health.state = WorkerState.FAILED
             self.health.last_error = f"{type(exc).__name__}: {exc}"
             self.health.heartbeat("worker failed")

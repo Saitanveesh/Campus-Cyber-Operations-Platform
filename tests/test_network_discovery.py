@@ -3,18 +3,18 @@ from campus_ops.workers.network_discovery import elect_network, score_candidate
 
 
 def candidate(name: str, **overrides) -> NetworkCandidate:
-    base = dict(
-        name=name,
-        is_up=True,
-        is_loopback=False,
-        ipv4=("192.0.2.10",),
-        ipv6=(),
-        default_route=False,
-        route_metric=None,
-        bytes_recv=100,
-        bytes_sent=100,
-        category="ethernet",
-    )
+    base = {
+        "name": name,
+        "is_up": True,
+        "is_loopback": False,
+        "ipv4": ("192.0.2.10",),
+        "ipv6": (),
+        "default_route": False,
+        "route_metric": None,
+        "bytes_recv": 100,
+        "bytes_sent": 100,
+        "category": "ethernet",
+    }
     base.update(overrides)
     return NetworkCandidate(**base)
 
