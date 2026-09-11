@@ -55,41 +55,6 @@ class IntelligenceWorker(BaseWorker):
         self.state = state
         self.session_provider = session_provider
         self.network_provider = network_provider
-        self._metric_session: str | None = None
-        self._reset_tcp_metrics()
-
-    def _reset_tcp_metrics(self) -> None:
-        self._rtt_samples = 0
-        self._rtt_sum_ms = 0.0
-        self._tcp_packets = 0
-        self._retransmissions = 0
-        self._duplicate_acks = 0
-
-    def _update_tcp_metrics(self, payload: dict[str, Any]) -> None:
-        if payload.get("transport") != "TCP":
-            return
-        self._tcp_packets += 1
-        if payload.get("tcp_retransmission") or payload.get("tcp_fast_retransmission"):
-            self._retransmissions += 1
-        if payload.get("tcp_duplicate_ack"):
-            self._duplicate_acks += 1
-        raw_rtt = str(payload.get("tcp_ack_rtt") or "")
-        if raw_rtt:
-            try:
-                self._rtt_sum_ms += float(raw_rtt) * 1000.0
-                self._rtt_samples += 1
-            except ValueError:
-                pass
-        self.state.update_metrics(
-            tcp_packets=self._tcp_packets,
-            tcp_retransmissions=self._retransmissions,
-            tcp_duplicate_acks=self._duplicate_acks,
-            tcp_retransmission_percent=(self._retransmissions / self._tcp_packets * 100.0)
-            if self._tcp_packets
-            else 0.0,
-            tcp_avg_ack_rtt_ms=(self._rtt_sum_ms / self._rtt_samples) if self._rtt_samples else None,
-            tcp_rtt_samples=self._rtt_samples,
-        )
 
     async def run(self) -> None:
         sub = await self.bus.subscribe(self.name)
@@ -100,14 +65,10 @@ class IntelligenceWorker(BaseWorker):
                 session_id = self.session_provider()
                 if not session_id or event.session_id != session_id:
                     continue
-                if self._metric_session != session_id:
-                    self._metric_session = session_id
-                    self._reset_tcp_metrics()
                 if event.kind != EventKind.OBSERVATION or event.payload.get("type") != "PACKET":
                     continue
 
                 payload = dict(event.payload)
-                self._update_tcp_metrics(payload)
                 network = self.network_provider()
                 now = datetime.now(UTC).isoformat()
                 src_ip = str(payload.get("src_ip") or "")
@@ -129,11 +90,13 @@ class IntelligenceWorker(BaseWorker):
                             "ip": src_ip,
                             "mac": eth_src or previous.get("mac"),
                             "role": src_role,
-                            "local_device": src_role in {"SENSOR", "INFRASTRUCTURE", "LOCAL_SUBNET_ENDPOINT"},
+                            "local_device": src_role
+                            in {"SENSOR", "INFRASTRUCTURE", "LOCAL_SUBNET_ENDPOINT"},
                             "first_seen": previous.get("first_seen", now),
                             "last_seen": now,
                             "packets_as_source": int(previous.get("packets_as_source", 0)) + 1,
-                            "dhcp_hostname": payload.get("dhcp_hostname") or previous.get("dhcp_hostname"),
+                            "dhcp_hostname": payload.get("dhcp_hostname")
+                            or previous.get("dhcp_hostname"),
                             "vlan_id": payload.get("vlan_id") or previous.get("vlan_id"),
                             "evidence": "PASSIVE_SOURCE_FRAME",
                         },
@@ -158,14 +121,17 @@ class IntelligenceWorker(BaseWorker):
                             "first_seen": previous_flow.get("first_seen", now),
                             "last_seen": now,
                             "packets": int(previous_flow.get("packets", 0)) + 1,
-                            "bytes": int(previous_flow.get("bytes", 0)) + int(payload.get("length") or 0),
+                            "bytes": int(previous_flow.get("bytes", 0))
+                            + int(payload.get("length") or 0),
                             "dns_query": payload.get("dns_query") or previous_flow.get("dns_query"),
                             "tls_sni": payload.get("tls_sni") or previous_flow.get("tls_sni"),
                             "http_host": payload.get("http_host") or previous_flow.get("http_host"),
                             "tcp_flags": payload.get("tcp_flags") or previous_flow.get("tcp_flags"),
-                            "tcp_ack_rtt": payload.get("tcp_ack_rtt") or previous_flow.get("tcp_ack_rtt"),
+                            "tcp_ack_rtt": payload.get("tcp_ack_rtt")
+                            or previous_flow.get("tcp_ack_rtt"),
                             "ip_ttl": payload.get("ip_ttl") or previous_flow.get("ip_ttl"),
-                            "ipv6_hop_limit": payload.get("ipv6_hop_limit") or previous_flow.get("ipv6_hop_limit"),
+                            "ipv6_hop_limit": payload.get("ipv6_hop_limit")
+                            or previous_flow.get("ipv6_hop_limit"),
                             "vlan_id": payload.get("vlan_id") or previous_flow.get("vlan_id"),
                         },
                     )
@@ -180,11 +146,12 @@ class IntelligenceWorker(BaseWorker):
                             "source_role": src_role,
                             "target_role": dst_role,
                             "packets": int(previous_edge.get("packets", 0)) + 1,
-                            "bytes": int(previous_edge.get("bytes", 0)) + int(payload.get("length") or 0),
+                            "bytes": int(previous_edge.get("bytes", 0))
+                            + int(payload.get("length") or 0),
                             "last_seen": now,
                             "evidence": "OBSERVED_COMMUNICATION",
                         },
                     )
-                self.health.heartbeat("asset/flow/TCP/topology correlation active")
+                self.health.heartbeat("asset/flow/topology correlation active")
         finally:
             await self.bus.unsubscribe(self.name)
