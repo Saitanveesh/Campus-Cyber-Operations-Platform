@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
 from datetime import UTC, datetime
 
 from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, WorkerState
 from campus_ops.state import LiveState
+from campus_ops.tooling.registry import resolve_executable
 from campus_ops.workers.base import BaseWorker
 
 
@@ -73,14 +73,24 @@ class CaptureWorker(BaseWorker):
                 return line.split(".", 1)[0].strip()
         return requested
 
-    async def run(self) -> None:
-        tshark = shutil.which("tshark")
-        if tshark is None:
+    async def _wait_for_tshark(self) -> str | None:
+        while not self.stopping:
+            tshark = resolve_executable("tshark")
+            if tshark:
+                return tshark
             self.health.state = WorkerState.DEGRADED
-            self.health.heartbeat("TShark unavailable; install Wireshark/Npcap")
-            self.state.set_capture(state="UNAVAILABLE", backend=None, detail="TShark not installed")
-            while not self.stopping:
-                await asyncio.sleep(2)
+            self.health.heartbeat("TShark unavailable")
+            self.state.set_capture(
+                state="UNAVAILABLE",
+                backend=None,
+                detail="TShark not found. Install Wireshark with Npcap.",
+            )
+            await asyncio.sleep(3)
+        return None
+
+    async def run(self) -> None:
+        tshark = await self._wait_for_tshark()
+        if not tshark:
             return
 
         self.health.state = WorkerState.HEALTHY
@@ -122,7 +132,7 @@ class CaptureWorker(BaseWorker):
                 self._process = await asyncio.create_subprocess_exec(
                     *command,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
                 )
                 bound_interface = interface
                 self.health.state = WorkerState.HEALTHY
@@ -130,7 +140,7 @@ class CaptureWorker(BaseWorker):
                     state="ACTIVE",
                     interface=interface,
                     backend="tshark",
-                    detail="passive packet metadata capture active",
+                    detail=f"capturing on {interface}",
                 )
 
             assert self._process.stdout is not None
@@ -141,16 +151,24 @@ class CaptureWorker(BaseWorker):
                     state="LINK_UP_IDLE",
                     interface=interface,
                     backend="tshark",
-                    detail="capture process healthy; no packet observed in last 2s",
+                    detail="capture is running; no packet observed in the last 2 seconds",
                 )
-                self.health.heartbeat(f"capture process healthy on {interface}; link idle")
+                self.health.heartbeat(f"capture healthy on {interface}; idle")
                 continue
             if not raw:
                 code = await self._process.wait()
-                self.state.set_capture(state="ERROR", detail=f"TShark exited with code {code}")
+                stderr_text = ""
+                if self._process.stderr is not None:
+                    stderr = await self._process.stderr.read()
+                    stderr_text = stderr.decode(errors="replace").strip()[-300:]
+                detail = f"TShark exited with code {code}"
+                if stderr_text:
+                    detail = f"{detail}: {stderr_text}"
+                self.state.set_capture(state="ERROR", detail=detail)
                 self.health.state = WorkerState.DEGRADED
+                self.health.heartbeat(detail)
                 self._process = None
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
                 continue
 
             values = raw.decode(errors="replace").rstrip("\r\n").split("\t")
@@ -174,7 +192,7 @@ class CaptureWorker(BaseWorker):
                 bytes=int(capture.get("bytes", 0)) + length,
                 last_packet_at=datetime.now(UTC).isoformat(),
                 state="ACTIVE",
-                detail="passive packet metadata capture active",
+                detail=f"capturing on {interface}",
             )
             self.state.increment_protocol(protocol)
             await self.bus.publish(
