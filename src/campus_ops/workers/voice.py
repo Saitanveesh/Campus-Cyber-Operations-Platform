@@ -201,8 +201,8 @@ class VoiceAlertWorker(BaseWorker):
             elif event.severity == Severity.HIGH:
                 text = str(event.payload.get("title") or "High priority security alert")
                 priority = 10
-        elif event.kind == EventKind.INCIDENT:
-            text = str(event.payload.get("voice") or event.payload.get("title") or "") or None
+        elif event.kind == EventKind.INCIDENT and event.payload.get("voice"):
+            text = str(event.payload["voice"])
             priority = 15
             critical = event.severity == Severity.CRITICAL
         elif event.kind == EventKind.HEALTH and event.payload.get("voice"):
