@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -14,7 +15,7 @@ SessionProvider = Callable[[], str | None]
 
 
 class OperationsWatchdogWorker(BaseWorker):
-    """Continuous supervisory watch over live capture, workers, incidents and control jobs."""
+    """Continuous supervisory watch over capture, workers, incidents and response control."""
 
     def __init__(
         self,
@@ -23,15 +24,20 @@ class OperationsWatchdogWorker(BaseWorker):
         session_provider: SessionProvider,
         snapshot_provider: SnapshotProvider,
         interval: float = 2.0,
+        briefing_interval: float = 300.0,
     ) -> None:
         super().__init__("operations-watchdog", bus)
         self.state = state
         self.session_provider = session_provider
         self.snapshot_provider = snapshot_provider
         self.interval = max(1.0, interval)
+        self.briefing_interval = max(60.0, briefing_interval)
         self._active: dict[str, dict[str, object]] = {}
         self._last_check: str | None = None
         self._checks = 0
+        self._last_announced: dict[str, float] = {}
+        self._last_briefing_at: str | None = None
+        self._last_briefing_monotonic = time.monotonic()
 
     @staticmethod
     def _condition(
@@ -51,6 +57,18 @@ class OperationsWatchdogWorker(BaseWorker):
             },
         )
 
+    @staticmethod
+    def _age_seconds(value: object) -> float | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return max(0.0, (datetime.now(UTC) - parsed.astimezone(UTC)).total_seconds())
+
     @classmethod
     def evaluate(cls, snapshot: dict[str, object]) -> dict[str, dict[str, object]]:
         conditions: dict[str, dict[str, object]] = {}
@@ -62,7 +80,7 @@ class OperationsWatchdogWorker(BaseWorker):
         if session_id:
             capture_state = str(capture.get("state") or "UNKNOWN").upper()
             detail = str(capture.get("detail") or capture_state)
-            if capture_state in {"ERROR", "UNAVAILABLE"}:
+            if capture_state in {"ERROR", "UNAVAILABLE", "CAPTURE_ERROR"}:
                 key, value = cls._condition(
                     "capture-unavailable",
                     Severity.HIGH,
@@ -71,13 +89,22 @@ class OperationsWatchdogWorker(BaseWorker):
                     "Sai Tanveesh, packet capture needs attention.",
                 )
                 conditions[key] = value
-            elif capture_state in {"STARTING", "WAITING"}:
+            elif capture_state in {"STARTING", "WAITING", "READY_FOR_CAPTURE"}:
                 key, value = cls._condition(
                     "capture-not-ready",
                     Severity.MEDIUM,
                     "Packet capture is not ready",
                     detail,
                     "Packet capture is not ready yet.",
+                )
+                conditions[key] = value
+            elif capture_state in {"STALLED", "CAPTURE_STALLED", "CAPTURE_SUSPECT"}:
+                key, value = cls._condition(
+                    "capture-stalled",
+                    Severity.HIGH,
+                    "Packet capture may be stalled",
+                    detail,
+                    "Attention. Packet capture may be stalled.",
                 )
                 conditions[key] = value
 
@@ -106,12 +133,29 @@ class OperationsWatchdogWorker(BaseWorker):
                     f"{name.replace('-', ' ')} is degraded.",
                 )
                 conditions[key] = value
+            elif state == WorkerState.HEALTHY.value:
+                heartbeat_age = cls._age_seconds(raw.get("last_heartbeat"))
+                if heartbeat_age is not None and heartbeat_age > 45:
+                    key, value = cls._condition(
+                        f"worker-stale:{name}",
+                        Severity.HIGH,
+                        f"{name} worker stopped reporting",
+                        f"last heartbeat {int(heartbeat_age)} seconds ago",
+                        f"Attention. {name.replace('-', ' ')} stopped reporting.",
+                    )
+                    conditions[key] = value
 
         event_bus = snapshot.get("event_bus") if isinstance(snapshot.get("event_bus"), dict) else {}
         dropped = 0
-        for raw in event_bus.values():
-            if isinstance(raw, dict):
-                dropped += int(raw.get("dropped") or 0)
+        pressured: list[str] = []
+        for name, raw in event_bus.items():
+            if not isinstance(raw, dict):
+                continue
+            dropped += int(raw.get("dropped") or 0)
+            queued = int(raw.get("queued") or 0)
+            capacity = int(raw.get("capacity") or 0)
+            if capacity > 0 and queued / capacity >= 0.75:
+                pressured.append(f"{name}={queued}/{capacity}")
         if dropped:
             key, value = cls._condition(
                 "event-loss",
@@ -122,16 +166,33 @@ class OperationsWatchdogWorker(BaseWorker):
             )
             value["count"] = dropped
             conditions[key] = value
+        elif pressured:
+            key, value = cls._condition(
+                "event-pressure",
+                Severity.MEDIUM,
+                "Event pipeline is under pressure",
+                ", ".join(pressured[:8]),
+                "The event pipeline is under pressure.",
+            )
+            conditions[key] = value
 
         incidents = live.get("incidents") if isinstance(live.get("incidents"), list) else []
         critical_open = 0
         high_open = 0
+        unattended: list[str] = []
         for incident in incidents:
-            if not isinstance(incident, dict) or str(incident.get("status") or "OPEN") == "CLOSED":
+            if not isinstance(incident, dict):
+                continue
+            status = str(incident.get("status") or "OPEN").upper()
+            if status == "CLOSED":
                 continue
             severity = str(incident.get("severity") or "").upper()
             critical_open += int(severity == Severity.CRITICAL.value)
             high_open += int(severity == Severity.HIGH.value)
+            if status == "OPEN" and severity in {Severity.HIGH.value, Severity.CRITICAL.value}:
+                age = cls._age_seconds(incident.get("first_seen"))
+                if age is not None and age >= 60:
+                    unattended.append(str(incident.get("id") or incident.get("title") or "incident"))
         if critical_open:
             key, value = cls._condition(
                 "critical-incidents",
@@ -152,13 +213,34 @@ class OperationsWatchdogWorker(BaseWorker):
             )
             value["count"] = high_open
             conditions[key] = value
+        if unattended:
+            key, value = cls._condition(
+                "unattended-incidents",
+                Severity.HIGH,
+                "Open incidents are awaiting acknowledgement",
+                f"unacknowledged high-priority incidents={len(unattended)}",
+                "High priority incidents are still awaiting acknowledgement.",
+            )
+            value["count"] = len(unattended)
+            conditions[key] = value
 
         jobs = snapshot.get("response_jobs") if isinstance(snapshot.get("response_jobs"), list) else []
-        failed_jobs = sum(
-            1
-            for job in jobs[:100]
-            if isinstance(job, dict) and str(job.get("status") or "").upper() in {"FAILED", "REJECTED"}
-        )
+        failed_jobs = 0
+        stuck_jobs = 0
+        for job in jobs[:200]:
+            if not isinstance(job, dict):
+                continue
+            status = str(job.get("status") or "").upper()
+            if status in {"FAILED", "REJECTED"}:
+                failed_jobs += 1
+                continue
+            age = cls._age_seconds(job.get("claimed_at") or job.get("created_at"))
+            if age is None:
+                continue
+            if status == "QUEUED" and age >= 120:
+                stuck_jobs += 1
+            elif status == "CLAIMED" and age >= 180:
+                stuck_jobs += 1
         if failed_jobs:
             key, value = cls._condition(
                 "response-job-failures",
@@ -168,6 +250,51 @@ class OperationsWatchdogWorker(BaseWorker):
                 "One or more response jobs need review.",
             )
             value["count"] = failed_jobs
+            conditions[key] = value
+        if stuck_jobs:
+            key, value = cls._condition(
+                "response-job-stalled",
+                Severity.HIGH,
+                "Response jobs appear stalled",
+                f"stalled response jobs={stuck_jobs}",
+                "Attention. One or more response jobs appear stalled.",
+            )
+            value["count"] = stuck_jobs
+            conditions[key] = value
+
+        agents = snapshot.get("managed_agents") if isinstance(snapshot.get("managed_agents"), list) else []
+        offline = [
+            agent
+            for agent in agents
+            if isinstance(agent, dict)
+            and agent.get("last_seen")
+            and str(agent.get("status") or "").upper() == "OFFLINE"
+        ]
+        if offline:
+            key, value = cls._condition(
+                "managed-agents-offline",
+                Severity.MEDIUM,
+                "Managed endpoint agents are offline",
+                f"offline agents={len(offline)}",
+                f"{len(offline)} managed endpoint agent{'s are' if len(offline) != 1 else ' is'} offline.",
+            )
+            value["count"] = len(offline)
+            conditions[key] = value
+
+        tools = snapshot.get("tools") if isinstance(snapshot.get("tools"), list) else []
+        required_missing = [
+            str(tool.get("label") or tool.get("key") or "tool")
+            for tool in tools
+            if isinstance(tool, dict) and bool(tool.get("required")) and not bool(tool.get("available"))
+        ]
+        if required_missing:
+            key, value = cls._condition(
+                "required-tools-missing",
+                Severity.HIGH,
+                "Required monitoring tools are unavailable",
+                ", ".join(required_missing),
+                "Attention. Required monitoring tools are unavailable.",
+            )
             conditions[key] = value
 
         return conditions
@@ -179,6 +306,70 @@ class OperationsWatchdogWorker(BaseWorker):
         except ValueError:
             return Severity.MEDIUM
 
+    @staticmethod
+    def _reminder_seconds(severity: Severity) -> float:
+        if severity == Severity.CRITICAL:
+            return 90.0
+        if severity == Severity.HIGH:
+            return 180.0
+        return 600.0
+
+    @classmethod
+    def briefing(cls, snapshot: dict[str, object]) -> str:
+        live = snapshot.get("live") if isinstance(snapshot.get("live"), dict) else {}
+        capture = live.get("capture") if isinstance(live.get("capture"), dict) else {}
+        network = snapshot.get("network") if isinstance(snapshot.get("network"), dict) else {}
+        session_id = snapshot.get("session_id")
+        if not session_id:
+            return "Sai Tanveesh, there is no active monitoring session right now."
+
+        interface = str(network.get("interface") or "the selected interface")
+        capture_state = str(capture.get("state") or "unknown").replace("_", " ").lower()
+        assets = live.get("assets") if isinstance(live.get("assets"), list) else []
+        flows = live.get("flows") if isinstance(live.get("flows"), list) else []
+        incidents = live.get("incidents") if isinstance(live.get("incidents"), list) else []
+        open_incidents = [
+            item
+            for item in incidents
+            if isinstance(item, dict) and str(item.get("status") or "OPEN").upper() != "CLOSED"
+        ]
+        critical = sum(
+            1
+            for item in open_incidents
+            if str(item.get("severity") or "").upper() == Severity.CRITICAL.value
+        )
+        high = sum(
+            1
+            for item in open_incidents
+            if str(item.get("severity") or "").upper() == Severity.HIGH.value
+        )
+        agents = snapshot.get("managed_agents") if isinstance(snapshot.get("managed_agents"), list) else []
+        online_agents = sum(
+            1
+            for item in agents
+            if isinstance(item, dict) and str(item.get("status") or "").upper() == "ONLINE"
+        )
+        watch = cls.evaluate(snapshot)
+
+        parts = [
+            f"Sai Tanveesh, monitoring is running on {interface}",
+            f"packet capture is {capture_state}",
+            f"I can currently see {len(assets)} assets and {len(flows)} active flows",
+        ]
+        if open_incidents:
+            parts.append(
+                f"there are {len(open_incidents)} open incidents, including {critical} critical and {high} high severity"
+            )
+        else:
+            parts.append("there are no open incidents")
+        if agents:
+            parts.append(f"{online_agents} of {len(agents)} managed endpoint agents are online")
+        if watch:
+            parts.append(f"the watchdog is tracking {len(watch)} operational conditions")
+        else:
+            parts.append("the watchdog reports no active operational problems")
+        return ". ".join(parts) + "."
+
     async def _publish_transition(self, key: str, condition: dict[str, object], resolved: bool) -> None:
         session_id = self.session_provider()
         if resolved:
@@ -188,6 +379,7 @@ class OperationsWatchdogWorker(BaseWorker):
                 "state": "RESOLVED",
                 "title": f"Resolved: {condition.get('title')}",
                 "detail": condition.get("detail"),
+                "voice": f"Resolved. {condition.get('title')}.",
             }
             severity = Severity.INFO
         else:
@@ -211,6 +403,25 @@ class OperationsWatchdogWorker(BaseWorker):
             )
         )
 
+    async def _publish_briefing(self, snapshot: dict[str, object]) -> None:
+        text = self.briefing(snapshot)
+        await self.bus.publish(
+            Event(
+                source=self.name,
+                kind=EventKind.ACTION,
+                session_id=self.session_provider(),
+                severity=Severity.INFO,
+                evidence_class="OPERATIONS_ASSISTANT_BRIEFING",
+                payload={
+                    "action": "OPERATIONS_BRIEFING",
+                    "message": text,
+                    "voice": text,
+                },
+            )
+        )
+        self._last_briefing_at = datetime.now(UTC).isoformat()
+        self._last_briefing_monotonic = time.monotonic()
+
     def status(self) -> dict[str, object]:
         highest = Severity.INFO
         rank = {
@@ -229,6 +440,8 @@ class OperationsWatchdogWorker(BaseWorker):
             "last_check": self._last_check,
             "checks": self._checks,
             "interval_seconds": self.interval,
+            "briefing_interval_seconds": self.briefing_interval,
+            "last_briefing_at": self._last_briefing_at,
             "active_conditions": dict(self._active),
             "active_count": len(self._active),
             "highest_severity": highest.value,
@@ -241,17 +454,27 @@ class OperationsWatchdogWorker(BaseWorker):
             snapshot = self.snapshot_provider()
             current = self.evaluate(snapshot)
             previous = self._active
+            now = time.monotonic()
 
             for key, condition in current.items():
-                if key not in previous or condition != previous[key]:
+                severity = self._severity(condition.get("severity"))
+                first_seen = key not in previous
+                changed = not first_seen and condition != previous[key]
+                due = now - self._last_announced.get(key, 0.0) >= self._reminder_seconds(severity)
+                if first_seen or changed or due:
                     await self._publish_transition(key, condition, resolved=False)
+                    self._last_announced[key] = now
             for key, condition in previous.items():
                 if key not in current:
                     await self._publish_transition(key, condition, resolved=True)
+                    self._last_announced.pop(key, None)
 
             self._active = current
             self._checks += 1
             self._last_check = datetime.now(UTC).isoformat()
+            if now - self._last_briefing_monotonic >= self.briefing_interval:
+                await self._publish_briefing(snapshot)
+
             if current:
                 self.health.heartbeat(f"watching; active conditions={len(current)}")
             else:
