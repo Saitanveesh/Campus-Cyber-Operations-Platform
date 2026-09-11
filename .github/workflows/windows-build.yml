@@ -1,0 +1,35 @@
+name: windows-build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[build]'
+      - name: Build executable
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --onefile --noconsole --name CampusCyberOperationsPlatform --add-data 'src/campus_ops/ui/index.html;campus_ops/ui' --collect-all uvicorn --collect-all fastapi src/campus_ops/__main__.py
+      - name: Smoke check artifact
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'dist/CampusCyberOperationsPlatform.exe')) { throw 'Executable missing' }
+          Get-Item 'dist/CampusCyberOperationsPlatform.exe' | Format-List Name,Length,LastWriteTime
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CampusCyberOperationsPlatform-Windows
+          path: dist/CampusCyberOperationsPlatform.exe
+          if-no-files-found: error
