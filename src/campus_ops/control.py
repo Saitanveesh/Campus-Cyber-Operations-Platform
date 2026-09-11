@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
@@ -29,11 +28,7 @@ def default_registry_path() -> Path:
 
 
 class EndpointControl:
-    """Explicit-enrollment remote-access launcher for authorized lab systems.
-
-    The platform never turns a merely observed host into a controllable host. An
-    operator must first enroll the endpoint and choose the permitted protocols.
-    """
+    """Explicit-enrollment remote-access launcher for authorized lab systems."""
 
     def __init__(self, bus: EventBus, session_provider, path: Path | None = None) -> None:
         self.bus = bus
@@ -55,11 +50,17 @@ class EndpointControl:
 
     def _save(self) -> None:
         temp = self.path.with_suffix(".tmp")
-        temp.write_text(json.dumps([asdict(item) for item in self._items.values()], indent=2), encoding="utf-8")
+        temp.write_text(
+            json.dumps([asdict(item) for item in self._items.values()], indent=2),
+            encoding="utf-8",
+        )
         temp.replace(self.path)
 
     def list(self) -> list[dict[str, object]]:
-        return [asdict(item) for item in sorted(self._items.values(), key=lambda item: item.name.lower())]
+        return [
+            asdict(item)
+            for item in sorted(self._items.values(), key=lambda item: item.name.lower())
+        ]
 
     def enroll(self, endpoint: EnrolledEndpoint) -> dict[str, object]:
         self._items[endpoint.endpoint_id] = endpoint
@@ -74,7 +75,10 @@ class EndpointControl:
 
     async def _port_open(self, host: str, port: int, timeout: float = 2.0) -> bool:
         try:
-            reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port),
+                timeout=timeout,
+            )
             writer.close()
             await writer.wait_closed()
             del reader
@@ -82,13 +86,53 @@ class EndpointControl:
         except (OSError, TimeoutError):
             return False
 
-    async def connect(self, endpoint_id: str, protocol: Literal["rdp", "ssh"]) -> dict[str, object]:
+    async def _windows_terminal_available(self) -> bool:
+        process = await asyncio.create_subprocess_exec(
+            "where.exe",
+            "wt.exe",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        return await process.wait() == 0
+
+    async def _launch_windows_client(self, endpoint: EnrolledEndpoint, protocol: str) -> None:
+        if protocol == "rdp":
+            await asyncio.create_subprocess_exec(
+                "mstsc.exe",
+                f"/v:{endpoint.host}",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            return
+        if await self._windows_terminal_available():
+            await asyncio.create_subprocess_exec(
+                "wt.exe",
+                "ssh",
+                endpoint.host,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        else:
+            await asyncio.create_subprocess_exec(
+                "cmd.exe",
+                "/k",
+                "ssh",
+                endpoint.host,
+            )
+
+    async def connect(
+        self,
+        endpoint_id: str,
+        protocol: Literal["rdp", "ssh"],
+    ) -> dict[str, object]:
         endpoint = self._items.get(endpoint_id)
         if endpoint is None:
             raise KeyError("endpoint is not enrolled")
         allowed = endpoint.allow_rdp if protocol == "rdp" else endpoint.allow_ssh
         if not allowed:
-            raise PermissionError(f"{protocol.upper()} is not permitted for this enrolled endpoint")
+            raise PermissionError(
+                f"{protocol.upper()} is not permitted for this enrolled endpoint"
+            )
         port = 3389 if protocol == "rdp" else 22
         session_id = self.session_provider()
         await self.bus.publish(
@@ -125,14 +169,7 @@ class EndpointControl:
             return {"status": "FAILED", "reason": "SERVICE_UNREACHABLE"}
 
         if os.name == "nt":
-            if protocol == "rdp":
-                subprocess.Popen(["mstsc.exe", f"/v:{endpoint.host}"], close_fds=True)
-            else:
-                terminal = "wt.exe" if subprocess.run(["where", "wt.exe"], capture_output=True, check=False).returncode == 0 else "cmd.exe"
-                if terminal == "wt.exe":
-                    subprocess.Popen([terminal, "ssh", endpoint.host], close_fds=True)
-                else:
-                    subprocess.Popen([terminal, "/k", "ssh", endpoint.host], close_fds=True)
+            await self._launch_windows_client(endpoint, protocol)
         await self.bus.publish(
             Event(
                 source="endpoint-control",
