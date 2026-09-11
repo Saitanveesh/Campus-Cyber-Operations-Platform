@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from campus_ops.control import EnrolledEndpoint
+from campus_ops.evidence import sha256_file
 from campus_ops.models import Event, EventKind
 from campus_ops.orchestrator import Orchestrator
 
@@ -162,6 +163,30 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
         )
         return {"incident": updated}
 
+    @app.post("/api/v1/live/incidents/{incident_id}/export")
+    async def export_incident(incident_id: str) -> dict[str, object]:
+        if orch.session_id is None:
+            raise HTTPException(status_code=409, detail="no active session")
+        try:
+            result = await asyncio.to_thread(orch.evidence.export_incident, incident_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="incident not found") from exc
+        await orch.bus.publish(
+            Event(
+                source="local-console",
+                kind=EventKind.ACTION,
+                session_id=orch.session_id,
+                payload={
+                    "action": "INCIDENT_EXPORTED",
+                    "incident_id": incident_id,
+                    "bundle_sha256": result["sha256"],
+                    "message": "Incident evidence bundle exported",
+                    "voice": "Incident evidence bundle exported.",
+                },
+            )
+        )
+        return {"bundle": result}
+
     @app.get("/api/v1/live/events")
     async def live_events(limit: int = Query(default=200, ge=1, le=1000)) -> dict[str, object]:
         live = orch.state.snapshot()
@@ -257,6 +282,7 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
             "staging": str(orch.malware.staging),
             "yara_rules": str(orch.malware.rules),
             "evidence_pcap": str(orch.forensic_capture.root),
+            "incident_bundles": str(orch.evidence.root),
         }
 
     @app.get("/api/v1/evidence/pcap")
@@ -272,6 +298,26 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
                 {
                     "name": path.name,
                     "size": stat.st_size,
+                    "modified_ns": stat.st_mtime_ns,
+                }
+            )
+        return {"root": str(root), "files": files[:100]}
+
+    @app.get("/api/v1/evidence/incidents")
+    async def evidence_incidents() -> dict[str, object]:
+        root = orch.evidence.root
+        files = []
+        for path in sorted(root.glob("incident-*.zip"), key=lambda item: item.stat().st_mtime, reverse=True):
+            try:
+                stat = path.stat()
+                digest = await asyncio.to_thread(sha256_file, path)
+            except OSError:
+                continue
+            files.append(
+                {
+                    "name": path.name,
+                    "size": stat.st_size,
+                    "sha256": digest,
                     "modified_ns": stat.st_mtime_ns,
                 }
             )
