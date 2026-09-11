@@ -79,7 +79,10 @@ class DosEarlyWarningWorker(BaseWorker):
             signals.append("many-sources-single-destination")
 
         if (len(signals) >= 2 or (pps >= 5000 and signals)) and now - self._last_alert >= 30:
-            confidence = min(96, 55 + 10 * len(signals) + min(20, int(max(0.0, baseline_ratio - 1) * 2)))
+            confidence = min(
+                96,
+                55 + 10 * len(signals) + min(20, int(max(0.0, baseline_ratio - 1) * 2)),
+            )
             self._last_alert = now
             await self.bus.publish(
                 Event(
@@ -131,24 +134,28 @@ class DosEarlyWarningWorker(BaseWorker):
                     continue
                 if self._session != session_id:
                     self._reset(session_id)
-                if event is not None and event.session_id == session_id:
-                    if event.kind == EventKind.OBSERVATION and event.payload.get("type") == "PACKET":
-                        payload = event.payload
-                        self._packets += 1
-                        transport = str(payload.get("transport") or "")
-                        flags = str(payload.get("tcp_flags") or "").lower()
-                        if transport == "UDP":
-                            self._udp += 1
-                        if payload.get("icmp_type"):
-                            self._icmp += 1
-                        if flags in {"0x0002", "0x002", "0x02", "2"}:
-                            self._syn += 1
-                        source = str(payload.get("src_ip") or "")
-                        destination = str(payload.get("dst_ip") or "")
-                        if source:
-                            self._sources[source] += 1
-                        if destination:
-                            self._destinations[destination] += 1
+                if (
+                    event is not None
+                    and event.session_id == session_id
+                    and event.kind == EventKind.OBSERVATION
+                    and event.payload.get("type") == "PACKET"
+                ):
+                    payload = event.payload
+                    self._packets += 1
+                    transport = str(payload.get("transport") or "")
+                    flags = str(payload.get("tcp_flags") or "").lower()
+                    if transport == "UDP":
+                        self._udp += 1
+                    if payload.get("icmp_type"):
+                        self._icmp += 1
+                    if flags in {"0x0002", "0x002", "0x02", "2"}:
+                        self._syn += 1
+                    source = str(payload.get("src_ip") or "")
+                    destination = str(payload.get("dst_ip") or "")
+                    if source:
+                        self._sources[source] += 1
+                    if destination:
+                        self._destinations[destination] += 1
                 if time.monotonic() - self._window_start >= 5.0:
                     await self._evaluate(session_id)
                 self.health.heartbeat(f"baseline windows={len(self._baseline)}")
