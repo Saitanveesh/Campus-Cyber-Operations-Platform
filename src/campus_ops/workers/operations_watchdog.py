@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Callable
 
 from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, Severity, WorkerState
@@ -32,7 +32,6 @@ class OperationsWatchdogWorker(BaseWorker):
         self._active: dict[str, dict[str, object]] = {}
         self._last_check: str | None = None
         self._checks = 0
-        self._last_bus_drops = 0
 
     @staticmethod
     def _condition(
@@ -110,8 +109,7 @@ class OperationsWatchdogWorker(BaseWorker):
 
         event_bus = snapshot.get("event_bus") if isinstance(snapshot.get("event_bus"), dict) else {}
         dropped = 0
-        subscribers = event_bus.get("subscribers") if isinstance(event_bus.get("subscribers"), dict) else {}
-        for raw in subscribers.values():
+        for raw in event_bus.values():
             if isinstance(raw, dict):
                 dropped += int(raw.get("dropped") or 0)
         if dropped:
