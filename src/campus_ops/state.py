@@ -186,3 +186,68 @@ class LiveState:
     def incident_count(self) -> int:
         with self._lock:
             return len(self.incidents)
+
+    @staticmethod
+    def _age_seconds(raw_timestamp: object, now: datetime) -> float | None:
+        if not raw_timestamp:
+            return None
+        try:
+            timestamp = datetime.fromisoformat(str(raw_timestamp))
+        except ValueError:
+            return None
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=UTC)
+        return max(0.0, (now - timestamp.astimezone(UTC)).total_seconds())
+
+    def prune_stale(
+        self,
+        *,
+        now: datetime | None = None,
+        asset_ttl_seconds: float = 600.0,
+        flow_ttl_seconds: float = 180.0,
+        edge_ttl_seconds: float = 180.0,
+    ) -> dict[str, int]:
+        """Expire stale live entities without touching historical storage."""
+        current = now or datetime.now(UTC)
+        removed = {"assets": 0, "flows": 0, "edges": 0}
+        with self._lock:
+            if self.session_id is None:
+                return removed
+
+            stale_assets = [
+                key
+                for key, value in self.assets.items()
+                if (age := self._age_seconds(value.get("last_seen"), current)) is not None
+                and age > asset_ttl_seconds
+            ]
+            stale_flows = [
+                key
+                for key, value in self.flows.items()
+                if (age := self._age_seconds(value.get("last_seen"), current)) is not None
+                and age > flow_ttl_seconds
+            ]
+            stale_edges = [
+                key
+                for key, value in self.topology_edges.items()
+                if (age := self._age_seconds(value.get("last_seen"), current)) is not None
+                and age > edge_ttl_seconds
+            ]
+
+            for key in stale_assets:
+                del self.assets[key]
+            for key in stale_flows:
+                del self.flows[key]
+            for key in stale_edges:
+                del self.topology_edges[key]
+
+            removed["assets"] = len(stale_assets)
+            removed["flows"] = len(stale_flows)
+            removed["edges"] = len(stale_edges)
+            self.metrics.update(
+                live_assets=len(self.assets),
+                live_flows=len(self.flows),
+                live_edges=len(self.topology_edges),
+                last_prune_removed=sum(removed.values()),
+                last_prune_at=current.isoformat(),
+            )
+        return removed
