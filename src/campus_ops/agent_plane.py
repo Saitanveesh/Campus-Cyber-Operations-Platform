@@ -58,7 +58,8 @@ class AgentRegistry:
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or (_root() / "agents.json")
-        self.jobs_path = _root() / "agent_jobs.json"
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.jobs_path = self.path.with_name("agent_jobs.json")
         self._agents: dict[str, ManagedAgent] = {}
         self._jobs: dict[str, AgentJob] = {}
         self._load()
@@ -132,7 +133,20 @@ class AgentRegistry:
         return True
 
     @staticmethod
-    def _public(agent: ManagedAgent) -> dict[str, Any]:
+    def _effective_status(agent: ManagedAgent, offline_after_seconds: float = 20.0) -> str:
+        if not agent.last_seen:
+            return agent.status
+        try:
+            seen = datetime.fromisoformat(agent.last_seen)
+        except ValueError:
+            return "UNKNOWN"
+        if seen.tzinfo is None:
+            seen = seen.replace(tzinfo=UTC)
+        age = (datetime.now(UTC) - seen.astimezone(UTC)).total_seconds()
+        return "ONLINE" if age <= offline_after_seconds else "OFFLINE"
+
+    @classmethod
+    def _public(cls, agent: ManagedAgent) -> dict[str, Any]:
         return {
             "endpoint_id": agent.endpoint_id,
             "name": agent.name,
@@ -141,7 +155,7 @@ class AgentRegistry:
             "enrolled_at": agent.enrolled_at,
             "last_seen": agent.last_seen,
             "version": agent.version,
-            "status": agent.status,
+            "status": cls._effective_status(agent),
             "telemetry": dict(agent.telemetry),
         }
 
