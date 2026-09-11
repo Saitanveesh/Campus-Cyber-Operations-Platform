@@ -13,9 +13,12 @@ from campus_ops.models import Event, EventKind, Severity, WorkerState
 from campus_ops.state import LiveState
 from campus_ops.workers.capture import CaptureWorker
 from campus_ops.workers.detection import BehaviourDetectionWorker
+from campus_ops.workers.history import HistoryWorker
+from campus_ops.workers.incidents import IncidentCorrelationWorker
 from campus_ops.workers.intelligence import IntelligenceWorker
 from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
 from campus_ops.workers.state_sink import StateSinkWorker
+from campus_ops.workers.suricata_feed import SuricataFeedWorker
 from campus_ops.workers.telemetry import TelemetryWorker
 from campus_ops.workers.tool_probe import ToolProbeWorker
 from campus_ops.workers.voice import VoiceAlertWorker
@@ -38,8 +41,11 @@ class Orchestrator:
         )
         self.tools = ToolProbeWorker(self.bus, interval=settings.tool_probe_seconds)
         self.state_sink = StateSinkWorker(self.bus, self.state)
+        self.history = HistoryWorker(self.bus)
         self.intelligence = IntelligenceWorker(self.bus, self.state, self.get_session_id)
         self.detection = BehaviourDetectionWorker(self.bus, self.state, self.get_session_id)
+        self.incidents = IncidentCorrelationWorker(self.bus, self.state, self.get_session_id)
+        self.suricata = SuricataFeedWorker(self.bus, self.get_session_id)
         self.telemetry = TelemetryWorker(
             self.bus,
             self.state,
@@ -56,8 +62,11 @@ class Orchestrator:
         self.voice = VoiceAlertWorker(self.bus, self.get_session_id)
         self.workers = [
             self.state_sink,
+            self.history,
             self.intelligence,
             self.detection,
+            self.incidents,
+            self.suricata,
             self.telemetry,
             self.voice,
             self.tools,
