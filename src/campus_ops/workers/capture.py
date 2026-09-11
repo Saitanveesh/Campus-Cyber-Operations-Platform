@@ -14,6 +14,8 @@ FIELDS = (
     "frame.protocols",
     "eth.src",
     "eth.dst",
+    "eth.src.oui_resolved",
+    "eth.dst.oui_resolved",
     "vlan.id",
     "ip.src",
     "ip.dst",
@@ -30,15 +32,49 @@ FIELDS = (
     "tcp.analysis.retransmission",
     "tcp.analysis.fast_retransmission",
     "tcp.analysis.duplicate_ack",
+    "tcp.analysis.lost_segment",
+    "tcp.analysis.out_of_order",
     "udp.srcport",
     "udp.dstport",
     "icmp.type",
     "icmpv6.type",
     "_ws.col.Protocol",
     "dns.qry.name",
+    "dns.flags.response",
+    "dns.flags.rcode",
+    "dns.a",
+    "dns.aaaa",
     "tls.handshake.extensions_server_name",
+    "tls.handshake.type",
+    "tls.handshake.version",
     "http.host",
     "dhcp.option.hostname",
+    "dhcp.option.dhcp_server_id",
+    "dhcp.option.dhcp",
+    "lldp.chassis.id",
+    "lldp.port.id",
+    "lldp.system.name",
+)
+
+SPECIAL_FIELDS = frozenset({"_ws.col.Protocol"})
+FALLBACK_FIELDS = (
+    "frame.len",
+    "frame.protocols",
+    "eth.src",
+    "eth.dst",
+    "ip.src",
+    "ip.dst",
+    "ipv6.src",
+    "ipv6.dst",
+    "arp.src.proto_ipv4",
+    "tcp.srcport",
+    "tcp.dstport",
+    "tcp.flags",
+    "udp.srcport",
+    "udp.dstport",
+    "_ws.col.Protocol",
+    "dns.qry.name",
+    "tls.handshake.extensions_server_name",
 )
 
 
@@ -51,6 +87,7 @@ class CaptureWorker(BaseWorker):
         self.session_provider = session_provider
         self.interface_provider = interface_provider
         self._process: asyncio.subprocess.Process | None = None
+        self.active_fields: tuple[str, ...] = FALLBACK_FIELDS
 
     async def stop(self) -> None:
         if self._process and self._process.returncode is None:
@@ -72,6 +109,33 @@ class CaptureWorker(BaseWorker):
                 return line.split(".", 1)[0].strip()
         return requested
 
+    async def _discover_fields(self, tshark: str) -> tuple[str, ...]:
+        process = await asyncio.create_subprocess_exec(
+            tshark,
+            "-G",
+            "fields",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=20.0)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            return FALLBACK_FIELDS
+        if process.returncode != 0:
+            return FALLBACK_FIELDS
+
+        supported: set[str] = set()
+        for line in stdout.decode(errors="replace").splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 3 and parts[0] == "F":
+                supported.add(parts[2])
+        active = tuple(field for field in FIELDS if field in SPECIAL_FIELDS or field in supported)
+        if "frame.len" not in active or "eth.src" not in active:
+            return FALLBACK_FIELDS
+        return active
+
     async def _wait_for_tshark(self) -> str | None:
         while not self.stopping:
             tshark = resolve_executable("tshark")
@@ -92,6 +156,7 @@ class CaptureWorker(BaseWorker):
         if not tshark:
             return
 
+        self.active_fields = await self._discover_fields(tshark)
         self.health.state = WorkerState.HEALTHY
         bound_interface: str | None = None
         while not self.stopping:
@@ -126,7 +191,7 @@ class CaptureWorker(BaseWorker):
                     "-E",
                     "occurrence=f",
                 ]
-                for field in FIELDS:
+                for field in self.active_fields:
                     command.extend(["-e", field])
                 self._process = await asyncio.create_subprocess_exec(
                     *command,
@@ -139,6 +204,7 @@ class CaptureWorker(BaseWorker):
                     state="ACTIVE",
                     interface=interface,
                     backend="tshark",
+                    decoder_fields=len(self.active_fields),
                     detail=f"capturing on {interface}",
                 )
 
@@ -150,6 +216,7 @@ class CaptureWorker(BaseWorker):
                     state="LINK_UP_IDLE",
                     interface=interface,
                     backend="tshark",
+                    decoder_fields=len(self.active_fields),
                     detail="capture is running; no packet observed in the last 2 seconds",
                 )
                 self.health.heartbeat(f"capture healthy on {interface}; idle")
@@ -171,8 +238,9 @@ class CaptureWorker(BaseWorker):
                 continue
 
             values = raw.decode(errors="replace").rstrip("\r\n").split("\t")
-            values += [""] * (len(FIELDS) - len(values))
-            packet = dict(zip(FIELDS, values, strict=False))
+            values += [""] * (len(self.active_fields) - len(values))
+            packet = {field: "" for field in FIELDS}
+            packet.update(dict(zip(self.active_fields, values, strict=False)))
             try:
                 length = int(packet["frame.len"] or 0)
             except ValueError:
@@ -191,6 +259,7 @@ class CaptureWorker(BaseWorker):
                 bytes=int(capture.get("bytes", 0)) + length,
                 last_packet_at=dt.datetime.now(dt.UTC).isoformat(),
                 state="ACTIVE",
+                decoder_fields=len(self.active_fields),
                 detail=f"capturing on {interface}",
             )
             self.state.increment_protocol(protocol)
@@ -208,6 +277,8 @@ class CaptureWorker(BaseWorker):
                         "transport": transport,
                         "eth_src": packet["eth.src"],
                         "eth_dst": packet["eth.dst"],
+                        "eth_src_vendor": packet["eth.src.oui_resolved"],
+                        "eth_dst_vendor": packet["eth.dst.oui_resolved"],
                         "vlan_id": packet["vlan.id"],
                         "src_ip": src_ip,
                         "dst_ip": dst_ip,
@@ -216,17 +287,32 @@ class CaptureWorker(BaseWorker):
                         "src_port": src_port,
                         "dst_port": dst_port,
                         "dns_query": packet["dns.qry.name"],
+                        "dns_is_response": packet["dns.flags.response"],
+                        "dns_rcode": packet["dns.flags.rcode"],
+                        "dns_a": packet["dns.a"],
+                        "dns_aaaa": packet["dns.aaaa"],
                         "tls_sni": packet["tls.handshake.extensions_server_name"],
+                        "tls_handshake_type": packet["tls.handshake.type"],
+                        "tls_version": packet["tls.handshake.version"],
                         "http_host": packet["http.host"],
                         "dhcp_hostname": packet["dhcp.option.hostname"],
+                        "dhcp_server_id": packet["dhcp.option.dhcp_server_id"],
+                        "dhcp_message_type": packet["dhcp.option.dhcp"],
+                        "lldp_chassis_id": packet["lldp.chassis.id"],
+                        "lldp_port_id": packet["lldp.port.id"],
+                        "lldp_system_name": packet["lldp.system.name"],
                         "tcp_flags": packet["tcp.flags"],
                         "tcp_window": packet["tcp.window_size_value"],
                         "tcp_ack_rtt": packet["tcp.analysis.ack_rtt"],
                         "tcp_retransmission": bool(packet["tcp.analysis.retransmission"]),
                         "tcp_fast_retransmission": bool(packet["tcp.analysis.fast_retransmission"]),
                         "tcp_duplicate_ack": bool(packet["tcp.analysis.duplicate_ack"]),
+                        "tcp_lost_segment": bool(packet["tcp.analysis.lost_segment"]),
+                        "tcp_out_of_order": bool(packet["tcp.analysis.out_of_order"]),
                         "icmp_type": packet["icmp.type"] or packet["icmpv6.type"],
                     },
                 )
             )
-            self.health.heartbeat(f"capture active on {interface}")
+            self.health.heartbeat(
+                f"capture active on {interface}; fields={len(self.active_fields)}"
+            )
