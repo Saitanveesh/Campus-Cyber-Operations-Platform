@@ -13,6 +13,8 @@ from campus_ops.workers.base import BaseWorker
 class VoiceAlertWorker(BaseWorker):
     """Windows voice and siren channel for operational events."""
 
+    STARTUP_GREETING = "Welcome back, Sai Tanveesh. Live Operations Console is starting."
+
     def __init__(self, bus: EventBus, session_provider) -> None:
         super().__init__("voice-alert", bus)
         self.session_provider = session_provider
@@ -49,7 +51,8 @@ class VoiceAlertWorker(BaseWorker):
         sub = await self.bus.subscribe(self.name)
         self.health.state = WorkerState.HEALTHY if os.name == "nt" else WorkerState.DEGRADED
         if os.name == "nt":
-            await self._speak("Welcome back, Sai Tanveesh. Live Operations Console is starting.")
+            await self._speak(self.STARTUP_GREETING)
+            self.last_spoken[f"ACTION:{self.STARTUP_GREETING}"] = time.monotonic()
             self.health.heartbeat("voice channel ready")
         try:
             while not self.stopping:
