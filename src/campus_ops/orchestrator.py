@@ -16,11 +16,14 @@ from campus_ops.state import LiveState
 from campus_ops.workers.application_intelligence import ApplicationIntelligenceWorker
 from campus_ops.workers.arp_guard import ArpGuardWorker
 from campus_ops.workers.capture import CaptureWorker
+from campus_ops.workers.capture_health import CaptureHealthWorker
 from campus_ops.workers.detection import BehaviourDetectionWorker
+from campus_ops.workers.dns_intelligence import DnsIntelligenceWorker
 from campus_ops.workers.dos_warning import DosEarlyWarningWorker
 from campus_ops.workers.forensic_capture import ForensicCaptureWorker
 from campus_ops.workers.history import HistoryWorker
 from campus_ops.workers.incidents import IncidentCorrelationWorker
+from campus_ops.workers.infrastructure_intelligence import InfrastructureIntelligenceWorker
 from campus_ops.workers.intelligence import IntelligenceWorker
 from campus_ops.workers.local_host import LocalHostTelemetryWorker
 from campus_ops.workers.malware import MalwareAnalysisWorker
@@ -69,7 +72,17 @@ class Orchestrator:
             self.state,
             self.get_session_id,
         )
+        self.dns_intelligence = DnsIntelligenceWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
         self.service_intelligence = ServiceIntelligenceWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.infrastructure_intelligence = InfrastructureIntelligenceWorker(
             self.bus,
             self.state,
             self.get_session_id,
@@ -103,6 +116,11 @@ class Orchestrator:
             self.state,
             self.get_session_id,
         )
+        self.capture_health = CaptureHealthWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
         self.capture = CaptureWorker(
             self.bus,
             self.state,
@@ -121,7 +139,9 @@ class Orchestrator:
             self.history,
             self.intelligence,
             self.application_intelligence,
+            self.dns_intelligence,
             self.service_intelligence,
+            self.infrastructure_intelligence,
             self.tcp_intelligence,
             self.arp_guard,
             self.detection,
@@ -133,6 +153,7 @@ class Orchestrator:
             self.telemetry,
             self.local_host,
             self.stale_cleanup,
+            self.capture_health,
             self.voice,
             self.tools,
             self.network,
