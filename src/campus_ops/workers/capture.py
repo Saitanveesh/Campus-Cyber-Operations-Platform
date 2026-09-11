@@ -144,6 +144,9 @@ class CaptureWorker(BaseWorker):
             protocol = packet["_ws.col.Protocol"] or "UNKNOWN"
             src_ip = packet["ip.src"] or packet["ipv6.src"] or packet["arp.src.proto_ipv4"]
             dst_ip = packet["ip.dst"] or packet["ipv6.dst"]
+            tcp = bool(packet["tcp.srcport"] or packet["tcp.dstport"] or packet["tcp.flags"])
+            udp = bool(packet["udp.srcport"] or packet["udp.dstport"])
+            transport = "TCP" if tcp else "UDP" if udp else protocol
             src_port = packet["tcp.srcport"] or packet["udp.srcport"]
             dst_port = packet["tcp.dstport"] or packet["udp.dstport"]
             capture = self.state.get_capture()
@@ -164,6 +167,7 @@ class CaptureWorker(BaseWorker):
                         "type": "PACKET",
                         "length": length,
                         "protocol": protocol,
+                        "transport": transport,
                         "eth_src": packet["eth.src"],
                         "eth_dst": packet["eth.dst"],
                         "src_ip": src_ip,
