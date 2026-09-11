@@ -7,4 +7,25 @@ def test_snapshot_has_live_contract_before_start():
     snapshot = orch.snapshot()
     assert snapshot["live_contract"] == "CURRENT_SESSION_ONLY"
     assert snapshot["session_id"] is None
-    assert set(snapshot["workers"]) == {"network-discovery", "tool-probe"}
+
+    workers = set(snapshot["workers"])
+    expected = {
+        "state-sink",
+        "history-storage",
+        "network-intelligence",
+        "application-intelligence",
+        "tcp-intelligence",
+        "arp-guard",
+        "behaviour-detection",
+        "dos-early-warning",
+        "incident-correlation",
+        "suricata-feed",
+        "malware-analysis",
+        "telemetry",
+        "voice-alert",
+        "tool-probe",
+        "network-discovery",
+        "capture",
+        "forensic-pcap",
+    }
+    assert workers == expected
