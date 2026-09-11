@@ -93,6 +93,8 @@ class Orchestrator:
             "interface": current.get("interface"),
             "ipv4": current.get("ipv4"),
             "ipv6": current.get("ipv6"),
+            "prefixes": current.get("prefixes"),
+            "gateway": current.get("gateway"),
             "default_route": current.get("default_route"),
         }
         raw = json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()
@@ -150,7 +152,7 @@ class Orchestrator:
             if change == "NETWORK_UNAVAILABLE":
                 await self._close_session(change)
                 continue
-            if change in {"INTERFACE_SELECTED", "INTERFACE_CHANGED"}:
+            if change in {"INTERFACE_SELECTED", "INTERFACE_CHANGED", "NETWORK_IDENTITY_CHANGED"}:
                 current = event.payload.get("current")
                 if isinstance(current, dict):
                     new_fingerprint = self._fingerprint(current)
