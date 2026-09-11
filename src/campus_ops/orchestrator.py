@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from campus_ops.config import DEFAULT_SETTINGS, Settings
+from campus_ops.control import EndpointControl
 from campus_ops.event_bus import EventBus, Subscription
 from campus_ops.models import Event, EventKind, Severity, WorkerState
 from campus_ops.state import LiveState
@@ -60,6 +61,7 @@ class Orchestrator:
             self.get_interface,
         )
         self.voice = VoiceAlertWorker(self.bus, self.get_session_id)
+        self.control = EndpointControl(self.bus, self.get_session_id)
         self.workers = [
             self.state_sink,
             self.history,
@@ -94,8 +96,7 @@ class Orchestrator:
         return hashlib.sha256(raw).hexdigest()[:20]
 
     async def _open_session(self, current: dict[str, object], change: str) -> None:
-        old_session = self.session_id
-        if old_session:
+        if self.session_id:
             self.state.close_session()
         self.session_id = str(uuid4())
         fingerprint = self._fingerprint(current)
@@ -210,5 +211,6 @@ class Orchestrator:
             "workers": worker_states,
             "tools": self.tools.statuses,
             "event_bus": self.bus.stats(),
+            "enrolled_endpoints": self.control.list(),
             "live": self.state.snapshot(),
         }
