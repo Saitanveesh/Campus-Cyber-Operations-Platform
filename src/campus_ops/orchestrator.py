@@ -8,44 +8,65 @@ from datetime import UTC, datetime
 from typing import ClassVar
 from uuid import uuid4
 
+from campus_ops.agent_plane import AgentRegistry
 from campus_ops.config import DEFAULT_SETTINGS, Settings
 from campus_ops.control import EndpointControl
+from campus_ops.cyberbit import CyberbitAdapter
 from campus_ops.event_bus import EventBus, Subscription
 from campus_ops.evidence import EvidenceExporter
 from campus_ops.models import Event, EventKind, Severity, WorkerState
+from campus_ops.response import ResponseEngine
 from campus_ops.state import LiveState
 from campus_ops.workers.application_intelligence import ApplicationIntelligenceWorker
 from campus_ops.workers.arp_guard import ArpGuardWorker
+from campus_ops.workers.asset_engine import AssetEngineWorker
+from campus_ops.workers.attack_timeline import AttackTimelineWorker
 from campus_ops.workers.capture import CaptureWorker
 from campus_ops.workers.capture_health import CaptureHealthWorker
 from campus_ops.workers.detection import BehaviourDetectionWorker
 from campus_ops.workers.dns_intelligence import DnsIntelligenceWorker
 from campus_ops.workers.dos_warning import DosEarlyWarningWorker
+from campus_ops.workers.flow_engine import FlowEngineWorker
+from campus_ops.workers.flow_receiver import FlowTelemetryReceiverWorker
 from campus_ops.workers.forensic_capture import ForensicCaptureWorker
 from campus_ops.workers.history import HistoryWorker
+from campus_ops.workers.identity_engine import IdentityEngineWorker
 from campus_ops.workers.incidents import IncidentCorrelationWorker
 from campus_ops.workers.infrastructure_intelligence import InfrastructureIntelligenceWorker
-from campus_ops.workers.intelligence import IntelligenceWorker
 from campus_ops.workers.local_host import LocalHostTelemetryWorker
 from campus_ops.workers.malware import MalwareAnalysisWorker
 from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
 from campus_ops.workers.pipeline_health import PipelineHealthWorker
+from campus_ops.workers.protocol_engine import ProtocolEngineWorker
+from campus_ops.workers.response_scheduler import ResponseSchedulerWorker
+from campus_ops.workers.risk_graph import RiskGraphWorker
 from campus_ops.workers.service_intelligence import ServiceIntelligenceWorker
+from campus_ops.workers.snmp_poller import SnmpPollerWorker
 from campus_ops.workers.stale_cleanup import StaleCleanupWorker
 from campus_ops.workers.state_sink import StateSinkWorker
 from campus_ops.workers.suricata_feed import SuricataFeedWorker
+from campus_ops.workers.syslog_receiver import SyslogReceiverWorker
 from campus_ops.workers.tcp_intelligence import TcpIntelligenceWorker
 from campus_ops.workers.telemetry import TelemetryWorker
 from campus_ops.workers.tool_probe import ToolProbeWorker
+from campus_ops.workers.topology_engine import TopologyEngineWorker
 from campus_ops.workers.traffic_baseline import TrafficBaselineWorker
 from campus_ops.workers.voice import VoiceAlertWorker
+from campus_ops.workers.wifi_telemetry import WifiTelemetryWorker
 
 
 class Orchestrator:
-    """Single authority for worker lifecycle and the current live session."""
+    """Single authority for workers, live sessions, endpoint agents and response control."""
 
     OPTIONAL_DEGRADED_WORKERS: ClassVar[frozenset[str]] = frozenset(
-        {"suricata-feed", "forensic-pcap"}
+        {
+            "suricata-feed",
+            "forensic-pcap",
+            "syslog-receiver",
+            "flow-telemetry-receiver",
+            "snmp-poller",
+            "wifi-telemetry",
+        }
     )
 
     def __init__(self, settings: Settings = DEFAULT_SETTINGS) -> None:
@@ -53,8 +74,11 @@ class Orchestrator:
         self.bus = EventBus()
         self.state = LiveState()
         self.evidence = EvidenceExporter(self.state)
+        self.agents = AgentRegistry()
+        self.cyberbit = CyberbitAdapter()
         self.started_at: datetime | None = None
         self.session_id: str | None = None
+
         self.network = NetworkDiscoveryWorker(
             self.bus,
             interval=settings.network_poll_seconds,
@@ -64,12 +88,27 @@ class Orchestrator:
         self.tools = ToolProbeWorker(self.bus, interval=settings.tool_probe_seconds)
         self.state_sink = StateSinkWorker(self.bus, self.state)
         self.history = HistoryWorker(self.bus)
-        self.intelligence = IntelligenceWorker(
+
+        self.protocol_engine = ProtocolEngineWorker(self.bus, self.state, self.get_session_id)
+        self.asset_engine = AssetEngineWorker(
             self.bus,
             self.state,
             self.get_session_id,
             self.get_network_context,
         )
+        self.flow_engine = FlowEngineWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+            self.get_network_context,
+        )
+        self.topology_engine = TopologyEngineWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+            self.get_network_context,
+        )
+        self.identity_engine = IdentityEngineWorker(self.bus, self.state, self.get_session_id)
         self.application_intelligence = ApplicationIntelligenceWorker(
             self.bus,
             self.state,
@@ -104,6 +143,9 @@ class Orchestrator:
             self.get_session_id,
         )
         self.incidents = IncidentCorrelationWorker(self.bus, self.state, self.get_session_id)
+        self.risk_graph = RiskGraphWorker(self.bus, self.state, self.get_session_id)
+        self.attack_timeline = AttackTimelineWorker(self.bus, self.state, self.get_session_id)
+
         self.suricata = SuricataFeedWorker(self.bus, self.get_session_id)
         self.malware = MalwareAnalysisWorker(self.bus, self.get_session_id)
         self.telemetry = TelemetryWorker(
@@ -114,6 +156,11 @@ class Orchestrator:
             interval=1.0,
         )
         self.local_host = LocalHostTelemetryWorker(self.bus, self.state, interval=3.0)
+        self.wifi = WifiTelemetryWorker(self.bus, self.state, self.get_session_id)
+        self.syslog = SyslogReceiverWorker(self.bus, self.get_session_id)
+        self.flow_receiver = FlowTelemetryReceiverWorker(self.bus, self.get_session_id)
+        self.snmp = SnmpPollerWorker(self.bus, self.get_session_id)
+
         self.stale_cleanup = StaleCleanupWorker(
             self.bus,
             self.state,
@@ -137,11 +184,19 @@ class Orchestrator:
             self.get_interface,
         )
         self.voice = VoiceAlertWorker(self.bus, self.get_session_id)
+
         self.control = EndpointControl(self.bus, self.get_session_id)
+        self.response = ResponseEngine(self.bus, self.agents, self.get_session_id)
+        self.scheduler = ResponseSchedulerWorker(self.bus, self.response)
+
         self.workers = [
             self.state_sink,
             self.history,
-            self.intelligence,
+            self.protocol_engine,
+            self.asset_engine,
+            self.flow_engine,
+            self.topology_engine,
+            self.identity_engine,
             self.application_intelligence,
             self.dns_intelligence,
             self.service_intelligence,
@@ -152,13 +207,20 @@ class Orchestrator:
             self.dos_warning,
             self.traffic_baseline,
             self.incidents,
+            self.risk_graph,
+            self.attack_timeline,
             self.suricata,
             self.malware,
             self.telemetry,
             self.local_host,
+            self.wifi,
+            self.syslog,
+            self.flow_receiver,
+            self.snmp,
             self.stale_cleanup,
             self.capture_health,
             self.pipeline_health,
+            self.scheduler,
             self.voice,
             self.tools,
             self.network,
@@ -311,8 +373,7 @@ class Orchestrator:
             overall = "DEGRADED"
         return {
             "product": "Campus Cyber Operations Platform",
-            "version": "0.2.0",
-            "live_contract": "CURRENT_SESSION_ONLY",
+            "version": "0.3.0",
             "overall": overall,
             "session_id": self.session_id,
             "started_at": self.started_at.isoformat() if self.started_at else None,
@@ -322,6 +383,10 @@ class Orchestrator:
             "tools": self.tools.statuses,
             "event_bus": self.bus.stats(),
             "enrolled_endpoints": self.control.list(),
+            "managed_agents": self.agents.list(),
+            "response_jobs": self.agents.jobs(limit=100),
+            "scheduled_actions": self.scheduler.list(limit=100),
+            "cyberbit_configured": self.cyberbit.configured,
             "evidence_root": str(self.forensic_capture.root),
             "incident_bundle_root": str(self.evidence.root),
             "malware_staging": str(self.malware.staging),
