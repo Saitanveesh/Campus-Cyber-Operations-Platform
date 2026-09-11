@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Callable
 
 from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, Severity, WorkerState
@@ -243,9 +243,7 @@ class OperationsWatchdogWorker(BaseWorker):
             previous = self._active
 
             for key, condition in current.items():
-                if key not in previous:
-                    await self._publish_transition(key, condition, resolved=False)
-                elif condition != previous[key]:
+                if key not in previous or condition != previous[key]:
                     await self._publish_transition(key, condition, resolved=False)
             for key, condition in previous.items():
                 if key not in current:
