@@ -83,6 +83,7 @@ class IntelligenceWorker(BaseWorker):
 
                 if src_ip and src_role not in {"SPECIAL_ADDRESS", "MULTICAST", "BROADCAST", "UNKNOWN"}:
                     previous = self.state.get_asset(src_ip)
+                    hostname = payload.get("dhcp_hostname") or previous.get("hostname")
                     self.state.upsert_asset(
                         src_ip,
                         {
@@ -90,13 +91,14 @@ class IntelligenceWorker(BaseWorker):
                             "ip": src_ip,
                             "mac": eth_src or previous.get("mac"),
                             "role": src_role,
+                            "classification": src_role,
                             "local_device": src_role
                             in {"SENSOR", "INFRASTRUCTURE", "LOCAL_SUBNET_ENDPOINT"},
+                            "hostname": hostname,
                             "first_seen": previous.get("first_seen", now),
                             "last_seen": now,
                             "packets_as_source": int(previous.get("packets_as_source", 0)) + 1,
-                            "dhcp_hostname": payload.get("dhcp_hostname")
-                            or previous.get("dhcp_hostname"),
+                            "dhcp_hostname": hostname,
                             "vlan_id": payload.get("vlan_id") or previous.get("vlan_id"),
                             "evidence": "PASSIVE_SOURCE_FRAME",
                         },
