@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict
 import ipaddress
 import json
 import os
 import subprocess
+from dataclasses import asdict
 
 import psutil
 
@@ -17,7 +17,6 @@ from campus_ops.models import (
     WorkerState,
 )
 from campus_ops.workers.base import BaseWorker
-
 
 VIRTUAL_HINTS = (
     "loopback",
