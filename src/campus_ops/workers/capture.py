@@ -31,12 +31,7 @@ FIELDS = (
 
 
 class CaptureWorker(BaseWorker):
-    """Passive live packet metadata capture through TShark/Npcap.
-
-    Only metadata required by observability workers is emitted. Payload content is
-    not retained here. If TShark is unavailable the worker fails closed and the UI
-    exposes capture as unavailable rather than displaying stale data.
-    """
+    """Passive live packet metadata capture through TShark/Npcap."""
 
     def __init__(self, bus: EventBus, state: LiveState, session_provider, interface_provider) -> None:
         super().__init__("capture", bus)
@@ -81,7 +76,12 @@ class CaptureWorker(BaseWorker):
             interface = self.interface_provider()
             session_id = self.session_provider()
             if not interface or not session_id:
-                self.state.set_capture(state="WAITING", interface=interface, backend="tshark", detail="waiting for active network session")
+                self.state.set_capture(
+                    state="WAITING",
+                    interface=interface,
+                    backend="tshark",
+                    detail="waiting for active network session",
+                )
                 self.health.heartbeat("waiting for network")
                 await asyncio.sleep(1)
                 continue
@@ -91,7 +91,19 @@ class CaptureWorker(BaseWorker):
                     self._process.terminate()
                     await self._process.wait()
                 capture_interface = await self._resolve_interface(tshark, interface)
-                command = [tshark, "-l", "-n", "-i", capture_interface, "-T", "fields", "-E", "separator=\t", "-E", "occurrence=f"]
+                command = [
+                    tshark,
+                    "-l",
+                    "-n",
+                    "-i",
+                    capture_interface,
+                    "-T",
+                    "fields",
+                    "-E",
+                    "separator=\t",
+                    "-E",
+                    "occurrence=f",
+                ]
                 for field in FIELDS:
                     command.extend(["-e", field])
                 self._process = await asyncio.create_subprocess_exec(
@@ -100,7 +112,13 @@ class CaptureWorker(BaseWorker):
                     stderr=asyncio.subprocess.PIPE,
                 )
                 bound_interface = interface
-                self.state.set_capture(state="ACTIVE", interface=interface, backend="tshark", detail="passive metadata capture active")
+                self.health.state = WorkerState.HEALTHY
+                self.state.set_capture(
+                    state="ACTIVE",
+                    interface=interface,
+                    backend="tshark",
+                    detail="passive metadata capture active",
+                )
 
             assert self._process.stdout is not None
             try:
@@ -128,7 +146,7 @@ class CaptureWorker(BaseWorker):
             dst_ip = packet["ip.dst"] or packet["ipv6.dst"]
             src_port = packet["tcp.srcport"] or packet["udp.srcport"]
             dst_port = packet["tcp.dstport"] or packet["udp.dstport"]
-            capture = self.state.capture
+            capture = self.state.get_capture()
             self.state.set_capture(
                 packets=int(capture.get("packets", 0)) + 1,
                 bytes=int(capture.get("bytes", 0)) + length,
