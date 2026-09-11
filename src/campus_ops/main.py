@@ -8,6 +8,7 @@ import uvicorn
 
 from campus_ops.api import create_app
 from campus_ops.config import DEFAULT_SETTINGS
+from campus_ops.runtime_ui import install_runtime_extensions
 
 
 def _open_console() -> None:
@@ -16,10 +17,14 @@ def _open_console() -> None:
     webbrowser.open(f"http://{DEFAULT_SETTINGS.host}:{DEFAULT_SETTINGS.port}")
 
 
+def build_app():
+    return install_runtime_extensions(create_app())
+
+
 def main() -> None:
     threading.Timer(1.2, _open_console).start()
     uvicorn.run(
-        create_app(),
+        build_app(),
         host=DEFAULT_SETTINGS.host,
         port=DEFAULT_SETTINGS.port,
         log_level="warning",
