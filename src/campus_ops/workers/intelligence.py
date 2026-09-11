@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 from datetime import UTC, datetime
 
@@ -49,56 +48,70 @@ class IntelligenceWorker(BaseWorker):
                     continue
                 if event.kind != EventKind.OBSERVATION or event.payload.get("type") != "PACKET":
                     continue
+
                 payload = event.payload
                 now = datetime.now(UTC).isoformat()
                 src_ip = str(payload.get("src_ip") or "")
                 dst_ip = str(payload.get("dst_ip") or "")
                 eth_src = str(payload.get("eth_src") or "")
                 protocol = str(payload.get("protocol") or "UNKNOWN")
+                transport = str(payload.get("transport") or protocol)
                 src_port = str(payload.get("src_port") or "")
                 dst_port = str(payload.get("dst_port") or "")
-                if src_ip and classify_ip(src_ip) not in {"INVALID", "MULTICAST", "LOOPBACK", "SPECIAL"}:
-                    previous = self.state.assets.get(src_ip, {})
-                    self.state.assets[src_ip] = {
-                        "id": src_ip,
-                        "ip": src_ip,
-                        "mac": eth_src or previous.get("mac"),
-                        "classification": classify_ip(src_ip),
-                        "first_seen": previous.get("first_seen", now),
-                        "last_seen": now,
-                        "packets_as_source": int(previous.get("packets_as_source", 0)) + 1,
-                        "evidence": "PASSIVE_SOURCE_FRAME",
-                    }
+
+                classification = classify_ip(src_ip)
+                if src_ip and classification not in {"INVALID", "MULTICAST", "LOOPBACK", "SPECIAL"}:
+                    previous = self.state.get_asset(src_ip)
+                    self.state.upsert_asset(
+                        src_ip,
+                        {
+                            "id": src_ip,
+                            "ip": src_ip,
+                            "mac": eth_src or previous.get("mac"),
+                            "classification": classification,
+                            "first_seen": previous.get("first_seen", now),
+                            "last_seen": now,
+                            "packets_as_source": int(previous.get("packets_as_source", 0)) + 1,
+                            "evidence": "PASSIVE_SOURCE_FRAME",
+                        },
+                    )
+
                 if src_ip and dst_ip:
-                    transport = "TCP" if payload.get("tcp_flags") or src_port or dst_port else "UDP" if src_port or dst_port else protocol
                     flow_key = f"{src_ip}:{src_port}>{dst_ip}:{dst_port}/{transport}"
-                    previous_flow = self.state.flows.get(flow_key, {})
-                    self.state.flows[flow_key] = {
-                        "id": flow_key,
-                        "src": src_ip,
-                        "dst": dst_ip,
-                        "src_port": src_port,
-                        "dst_port": dst_port,
-                        "transport": transport,
-                        "protocol": protocol,
-                        "first_seen": previous_flow.get("first_seen", now),
-                        "last_seen": now,
-                        "packets": int(previous_flow.get("packets", 0)) + 1,
-                        "bytes": int(previous_flow.get("bytes", 0)) + int(payload.get("length") or 0),
-                        "dns_query": payload.get("dns_query") or previous_flow.get("dns_query"),
-                        "tls_sni": payload.get("tls_sni") or previous_flow.get("tls_sni"),
-                    }
+                    previous_flow = self.state.get_flow(flow_key)
+                    self.state.upsert_flow(
+                        flow_key,
+                        {
+                            "id": flow_key,
+                            "src": src_ip,
+                            "dst": dst_ip,
+                            "src_port": src_port,
+                            "dst_port": dst_port,
+                            "transport": transport,
+                            "protocol": protocol,
+                            "first_seen": previous_flow.get("first_seen", now),
+                            "last_seen": now,
+                            "packets": int(previous_flow.get("packets", 0)) + 1,
+                            "bytes": int(previous_flow.get("bytes", 0)) + int(payload.get("length") or 0),
+                            "dns_query": payload.get("dns_query") or previous_flow.get("dns_query"),
+                            "tls_sni": payload.get("tls_sni") or previous_flow.get("tls_sni"),
+                            "tcp_flags": payload.get("tcp_flags") or previous_flow.get("tcp_flags"),
+                        },
+                    )
                     edge_key = f"{src_ip}>{dst_ip}"
-                    previous_edge = self.state.topology_edges.get(edge_key, {})
-                    self.state.topology_edges[edge_key] = {
-                        "id": edge_key,
-                        "source": src_ip,
-                        "target": dst_ip,
-                        "packets": int(previous_edge.get("packets", 0)) + 1,
-                        "bytes": int(previous_edge.get("bytes", 0)) + int(payload.get("length") or 0),
-                        "last_seen": now,
-                        "evidence": "OBSERVED_COMMUNICATION",
-                    }
-                self.health.heartbeat(f"assets={len(self.state.assets)} flows={len(self.state.flows)}")
+                    previous_edge = self.state.get_edge(edge_key)
+                    self.state.upsert_edge(
+                        edge_key,
+                        {
+                            "id": edge_key,
+                            "source": src_ip,
+                            "target": dst_ip,
+                            "packets": int(previous_edge.get("packets", 0)) + 1,
+                            "bytes": int(previous_edge.get("bytes", 0)) + int(payload.get("length") or 0),
+                            "last_seen": now,
+                            "evidence": "OBSERVED_COMMUNICATION",
+                        },
+                    )
+                self.health.heartbeat("passive asset/flow/topology correlation active")
         finally:
             await self.bus.unsubscribe(self.name)
