@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shutil
 from pathlib import Path
 
 from campus_ops.event_bus import EventBus
 from campus_ops.models import WorkerState
+from campus_ops.tooling.registry import resolve_executable
 from campus_ops.workers.base import BaseWorker
 
 
 def evidence_root() -> Path:
-    root = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "CampusCyberOperationsPlatform" / "evidence" / "pcap"
+    root = (
+        Path(os.environ.get("LOCALAPPDATA") or Path.home())
+        / "CampusCyberOperationsPlatform"
+        / "evidence"
+        / "pcap"
+    )
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -58,15 +63,15 @@ class ForensicCaptureWorker(BaseWorker):
         await super().stop()
 
     async def run(self) -> None:
-        dumpcap = shutil.which("dumpcap")
-        if dumpcap is None:
-            self.health.state = WorkerState.DEGRADED
-            self.health.heartbeat("dumpcap unavailable; rolling PCAP disabled")
-            while not self.stopping:
-                await asyncio.sleep(5)
-            return
-
         while not self.stopping:
+            dumpcap = resolve_executable("dumpcap")
+            if dumpcap is None:
+                await self._stop_process()
+                self.health.state = WorkerState.DEGRADED
+                self.health.heartbeat("dumpcap unavailable; rolling PCAP disabled")
+                await asyncio.sleep(5)
+                continue
+
             session_id = self.session_provider()
             interface = self.interface_provider()
             if not session_id or not interface:
@@ -93,8 +98,20 @@ class ForensicCaptureWorker(BaseWorker):
                     "-w",
                     str(base),
                     stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
                 )
+                await asyncio.sleep(0.5)
+                if self._process.returncode is not None:
+                    detail = f"dumpcap exited with code {self._process.returncode}"
+                    if self._process.stderr is not None:
+                        stderr = await self._process.stderr.read()
+                        text = stderr.decode(errors="replace").strip()[-300:]
+                        if text:
+                            detail = f"{detail}: {text}"
+                    self.health.state = WorkerState.DEGRADED
+                    self.health.heartbeat(detail)
+                    await asyncio.sleep(3)
+                    continue
                 self._bound = binding
                 self.health.state = WorkerState.HEALTHY
                 self.health.heartbeat(f"bounded PCAP ring active on {interface}")
