@@ -9,13 +9,7 @@ from dataclasses import asdict
 
 import psutil
 
-from campus_ops.models import (
-    Event,
-    EventKind,
-    NetworkCandidate,
-    SelectedNetwork,
-    WorkerState,
-)
+from campus_ops.models import Event, EventKind, NetworkCandidate, SelectedNetwork, WorkerState
 from campus_ops.workers.base import BaseWorker
 
 VIRTUAL_HINTS = (
@@ -28,6 +22,8 @@ VIRTUAL_HINTS = (
     "tunnel",
     "tap",
     "vpn",
+    "docker",
+    "wsl",
 )
 
 
@@ -63,6 +59,12 @@ def score_candidate(candidate: NetworkCandidate) -> tuple[int, tuple[str, ...]]:
     if candidate.default_route:
         score += 45
         reasons.append("default-route")
+    if candidate.gateway:
+        score += 5
+        reasons.append("gateway")
+    if candidate.prefixes:
+        score += 3
+        reasons.append("prefix-known")
     if candidate.route_metric is not None:
         score += max(0, 20 - min(candidate.route_metric, 20))
         reasons.append(f"metric:{candidate.route_metric}")
@@ -89,12 +91,21 @@ def _is_usable_ip(value: str) -> bool:
     return not (ip.is_loopback or ip.is_unspecified or ip.is_multicast)
 
 
-def _windows_routes() -> dict[str, tuple[bool, int | None]]:
+def _prefix(address: str, netmask: str | None) -> str | None:
+    if not netmask:
+        return None
+    try:
+        return ipaddress.ip_network(f"{address}/{netmask}", strict=False).with_prefixlen
+    except ValueError:
+        return None
+
+
+def _windows_routes() -> dict[str, tuple[bool, int | None, str | None]]:
     if os.name != "nt":
         return {}
     script = (
         "Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | "
-        "Select-Object InterfaceAlias,RouteMetric | ConvertTo-Json -Compress"
+        "Select-Object InterfaceAlias,RouteMetric,NextHop | ConvertTo-Json -Compress"
     )
     try:
         proc = subprocess.run(
@@ -108,16 +119,15 @@ def _windows_routes() -> dict[str, tuple[bool, int | None]]:
             return {}
         raw = json.loads(proc.stdout)
         rows = raw if isinstance(raw, list) else [raw]
-        result: dict[str, tuple[bool, int | None]] = {}
+        result: dict[str, tuple[bool, int | None, str | None]] = {}
         for row in rows:
             name = str(row.get("InterfaceAlias", ""))
             metric_raw = row.get("RouteMetric")
             metric = int(metric_raw) if metric_raw is not None else None
+            gateway = str(row.get("NextHop") or "") or None
             previous = result.get(name)
-            if previous is None or (
-                metric is not None and (previous[1] is None or metric < previous[1])
-            ):
-                result[name] = (True, metric)
+            if previous is None or (metric is not None and (previous[1] is None or metric < previous[1])):
+                result[name] = (True, metric, gateway)
         return result
     except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError):
         return {}
@@ -132,6 +142,7 @@ def discover_candidates() -> list[NetworkCandidate]:
     for name, addr_list in addresses.items():
         ipv4: list[str] = []
         ipv6: list[str] = []
+        prefixes: list[str] = []
         is_loopback = False
         for addr in addr_list:
             value = addr.address
@@ -140,11 +151,18 @@ def discover_candidates() -> list[NetworkCandidate]:
                     is_loopback = True
                 if _is_usable_ip(value):
                     ipv4.append(value)
+                    prefix = _prefix(value, addr.netmask)
+                    if prefix:
+                        prefixes.append(prefix)
             elif addr.family.name == "AF_INET6" and _is_usable_ip(value):
-                ipv6.append(value.split("%", 1)[0])
+                clean = value.split("%", 1)[0]
+                ipv6.append(clean)
+                prefix = _prefix(clean, addr.netmask)
+                if prefix:
+                    prefixes.append(prefix)
         stat = stats.get(name)
         io = counters.get(name)
-        default_route, metric = routes.get(name, (False, None))
+        default_route, metric, gateway = routes.get(name, (False, None, None))
         candidates.append(
             NetworkCandidate(
                 name=name,
@@ -152,8 +170,10 @@ def discover_candidates() -> list[NetworkCandidate]:
                 is_loopback=is_loopback,
                 ipv4=tuple(sorted(set(ipv4))),
                 ipv6=tuple(sorted(set(ipv6))),
+                prefixes=tuple(sorted(set(prefixes))),
                 default_route=default_route,
                 route_metric=metric,
+                gateway=gateway,
                 bytes_recv=io.bytes_recv if io else 0,
                 bytes_sent=io.bytes_sent if io else 0,
                 category=classify_interface(name),
@@ -174,8 +194,10 @@ def elect_network(candidates: list[NetworkCandidate]) -> SelectedNetwork | None:
         reasons=reasons,
         ipv4=selected.ipv4,
         ipv6=selected.ipv6,
+        prefixes=selected.prefixes,
         default_route=selected.default_route,
         route_metric=selected.route_metric,
+        gateway=selected.gateway,
     )
 
 
@@ -229,9 +251,28 @@ class NetworkDiscoveryWorker(BaseWorker):
             await self._confirm_and_switch(proposed)
             return
         if proposed.interface == self.selected.interface:
+            changed_identity = (
+                proposed.ipv4 != self.selected.ipv4
+                or proposed.ipv6 != self.selected.ipv6
+                or proposed.prefixes != self.selected.prefixes
+                or proposed.gateway != self.selected.gateway
+            )
+            previous = self.selected
             self.selected = proposed
             self._pending_name = None
             self._pending_count = 0
+            if changed_identity:
+                await self.bus.publish(
+                    Event(
+                        source=self.name,
+                        kind=EventKind.NETWORK,
+                        payload={
+                            "change": "NETWORK_IDENTITY_CHANGED",
+                            "previous": asdict(previous),
+                            "current": asdict(proposed),
+                        },
+                    )
+                )
             return
         if proposed.score < self.selected.score + self.switch_margin:
             return
