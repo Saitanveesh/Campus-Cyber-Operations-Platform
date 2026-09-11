@@ -11,10 +11,7 @@ from campus_ops.workers.base import BaseWorker
 
 
 class VoiceAlertWorker(BaseWorker):
-    """Windows voice and siren channel for operational events.
-
-    Audio is supplemental only; every message is also represented in the UI/event log.
-    """
+    """Windows voice and siren channel for operational events."""
 
     def __init__(self, bus: EventBus, session_provider) -> None:
         super().__init__("voice-alert", bus)
@@ -28,6 +25,7 @@ class VoiceAlertWorker(BaseWorker):
         script = (
             "Add-Type -AssemblyName System.Speech; "
             "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+            "$s.Rate=0; $s.Volume=100; "
             f"$s.Speak('{safe}')"
         )
         if critical:
@@ -50,6 +48,9 @@ class VoiceAlertWorker(BaseWorker):
     async def run(self) -> None:
         sub = await self.bus.subscribe(self.name)
         self.health.state = WorkerState.HEALTHY if os.name == "nt" else WorkerState.DEGRADED
+        if os.name == "nt":
+            await self._speak("Welcome back, Sai Tanveesh. Live Operations Console is starting.")
+            self.health.heartbeat("voice channel ready")
         try:
             while not self.stopping:
                 event = await sub.queue.get()
@@ -58,7 +59,10 @@ class VoiceAlertWorker(BaseWorker):
                     continue
                 text = None
                 critical = False
-                if event.kind == EventKind.ALERT and event.severity in {Severity.HIGH, Severity.CRITICAL}:
+                if event.kind == EventKind.ALERT and event.severity in {
+                    Severity.HIGH,
+                    Severity.CRITICAL,
+                }:
                     text = str(event.payload.get("title") or "High priority security alert")
                     critical = event.severity == Severity.CRITICAL
                 elif event.kind == EventKind.ACTION:
@@ -71,6 +75,8 @@ class VoiceAlertWorker(BaseWorker):
                     if now - self.last_spoken.get(key, 0.0) >= 10:
                         self.last_spoken[key] = now
                         await self._speak(text, critical=critical)
-                self.health.heartbeat("voice channel ready" if os.name == "nt" else "voice unavailable on this OS")
+                self.health.heartbeat(
+                    "voice channel ready" if os.name == "nt" else "voice unavailable on this OS"
+                )
         finally:
             await self.bus.unsubscribe(self.name)
