@@ -22,6 +22,7 @@ from campus_ops.workers.forensic_capture import ForensicCaptureWorker
 from campus_ops.workers.history import HistoryWorker
 from campus_ops.workers.incidents import IncidentCorrelationWorker
 from campus_ops.workers.intelligence import IntelligenceWorker
+from campus_ops.workers.local_host import LocalHostTelemetryWorker
 from campus_ops.workers.malware import MalwareAnalysisWorker
 from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
 from campus_ops.workers.state_sink import StateSinkWorker
@@ -83,6 +84,7 @@ class Orchestrator:
             self.get_interface,
             interval=1.0,
         )
+        self.local_host = LocalHostTelemetryWorker(self.bus, self.state, interval=3.0)
         self.capture = CaptureWorker(
             self.bus,
             self.state,
@@ -109,6 +111,7 @@ class Orchestrator:
             self.suricata,
             self.malware,
             self.telemetry,
+            self.local_host,
             self.voice,
             self.tools,
             self.network,
@@ -274,5 +277,6 @@ class Orchestrator:
             "enrolled_endpoints": self.control.list(),
             "evidence_root": str(self.forensic_capture.root),
             "malware_staging": str(self.malware.staging),
+            "voice": self.voice.status(),
             "live": self.state.snapshot(),
         }
