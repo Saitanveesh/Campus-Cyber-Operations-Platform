@@ -175,6 +175,14 @@ class LiveState:
             if self.session_id is not None:
                 self.incidents[incident_id] = dict(value)
 
+    def update_incident(self, incident_id: str, **values: Any) -> dict[str, Any] | None:
+        with self._lock:
+            current = self.incidents.get(incident_id)
+            if current is None:
+                return None
+            current.update(values)
+            return dict(current)
+
     def incident_count(self) -> int:
         with self._lock:
             return len(self.incidents)
