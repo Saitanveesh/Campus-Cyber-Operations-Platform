@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "campus-cyber-operations-platform"
-version = "0.2.0"
-description = "Windows-native cyber operations platform for authorized labs and cyber ranges"
+version = "0.3.0"
+description = "Windows-native campus cyber operations platform"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.116,<1",
@@ -25,6 +25,7 @@ build = [
 
 [project.scripts]
 campus-ops = "campus_ops.main:main"
+campus-ops-agent = "campus_ops.agent:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
