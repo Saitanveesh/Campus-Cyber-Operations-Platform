@@ -37,6 +37,7 @@ from campus_ops.workers.infrastructure_intelligence import InfrastructureIntelli
 from campus_ops.workers.local_host import LocalHostTelemetryWorker
 from campus_ops.workers.malware import MalwareAnalysisWorker
 from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
+from campus_ops.workers.operations_watchdog import OperationsWatchdogWorker
 from campus_ops.workers.performance_engine import PerformanceEngineWorker
 from campus_ops.workers.pipeline_health import PipelineHealthWorker
 from campus_ops.workers.protocol_engine import ProtocolEngineWorker
@@ -203,6 +204,13 @@ class Orchestrator:
         self.control = EndpointControl(self.bus, self.get_session_id)
         self.response = ResponseEngine(self.bus, self.agents, self.get_session_id)
         self.scheduler = ResponseSchedulerWorker(self.bus, self.response)
+        self.watchdog = OperationsWatchdogWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+            self.snapshot,
+            interval=2.0,
+        )
 
         self.workers = [
             self.state_sink,
@@ -240,6 +248,7 @@ class Orchestrator:
             self.pipeline_health,
             self.scheduler,
             self.voice,
+            self.watchdog,
             self.tools,
             self.network,
             self.capture,
@@ -409,5 +418,6 @@ class Orchestrator:
             "incident_bundle_root": str(self.evidence.root),
             "malware_staging": str(self.malware.staging),
             "voice": self.voice.status(),
+            "watchdog": self.watchdog.status(),
             "live": self.state.snapshot(),
         }
