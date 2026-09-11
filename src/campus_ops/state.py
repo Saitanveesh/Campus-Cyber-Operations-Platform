@@ -114,6 +114,10 @@ class LiveState:
         with self._lock:
             self.capture.update(values)
 
+    def get_capture(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self.capture)
+
     def update_metrics(self, **values: Any) -> None:
         with self._lock:
             self.metrics.update(values)
@@ -121,3 +125,35 @@ class LiveState:
     def increment_protocol(self, protocol: str, amount: int = 1) -> None:
         with self._lock:
             self.protocols[protocol] = self.protocols.get(protocol, 0) + amount
+
+    def get_asset(self, key: str) -> dict[str, Any]:
+        with self._lock:
+            return dict(self.assets.get(key, {}))
+
+    def upsert_asset(self, key: str, value: dict[str, Any]) -> None:
+        with self._lock:
+            if self.session_id is not None:
+                self.assets[key] = dict(value)
+
+    def get_flow(self, key: str) -> dict[str, Any]:
+        with self._lock:
+            return dict(self.flows.get(key, {}))
+
+    def upsert_flow(self, key: str, value: dict[str, Any]) -> None:
+        with self._lock:
+            if self.session_id is not None:
+                self.flows[key] = dict(value)
+
+    def get_edge(self, key: str) -> dict[str, Any]:
+        with self._lock:
+            return dict(self.topology_edges.get(key, {}))
+
+    def upsert_edge(self, key: str, value: dict[str, Any]) -> None:
+        with self._lock:
+            if self.session_id is not None:
+                self.topology_edges[key] = dict(value)
+
+    def add_incident(self, incident_id: str, value: dict[str, Any]) -> None:
+        with self._lock:
+            if self.session_id is not None:
+                self.incidents[incident_id] = dict(value)
