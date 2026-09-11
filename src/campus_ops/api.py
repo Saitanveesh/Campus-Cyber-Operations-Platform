@@ -9,11 +9,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from campus_ops.control import EnrolledEndpoint
+from campus_ops.models import Event, EventKind
 from campus_ops.orchestrator import Orchestrator
 
 
 class EndpointEnrollRequest(BaseModel):
-    endpoint_id: str = Field(min_length=1, max_length=128)
+    endpoint_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
     name: str = Field(min_length=1, max_length=128)
     host: str = Field(min_length=1, max_length=255)
     platform: Literal["windows", "linux", "other"] = "other"
@@ -23,6 +24,14 @@ class EndpointEnrollRequest(BaseModel):
 
 class EndpointConnectRequest(BaseModel):
     protocol: Literal["rdp", "ssh"]
+
+
+class IncidentActionRequest(BaseModel):
+    action: Literal["acknowledge", "close", "reopen"]
+
+
+class VoiceMuteRequest(BaseModel):
+    seconds: int = Field(default=300, ge=1, le=86400)
 
 
 def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
@@ -104,7 +113,11 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
     @app.get("/api/v1/live/performance")
     async def live_performance() -> dict[str, object]:
         live = orch.state.snapshot()
-        return {"session_id": live["session_id"], "metrics": live["metrics"], "capture": live["capture"]}
+        return {
+            "session_id": live["session_id"],
+            "metrics": live["metrics"],
+            "capture": live["capture"],
+        }
 
     @app.get("/api/v1/live/alerts")
     async def live_alerts() -> dict[str, object]:
@@ -116,10 +129,48 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
         live = orch.state.snapshot()
         return {"session_id": live["session_id"], "incidents": live["incidents"]}
 
+    @app.post("/api/v1/live/incidents/{incident_id}/action")
+    async def incident_action(
+        incident_id: str,
+        request: IncidentActionRequest,
+    ) -> dict[str, object]:
+        if orch.session_id is None:
+            raise HTTPException(status_code=409, detail="no active session")
+        current = orch.state.get_incident(incident_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="incident not found")
+        status_by_action = {
+            "acknowledge": "ACKNOWLEDGED",
+            "close": "CLOSED",
+            "reopen": "OPEN",
+        }
+        status = status_by_action[request.action]
+        updated = orch.state.update_incident(incident_id, status=status)
+        await orch.bus.publish(
+            Event(
+                source="local-console",
+                kind=EventKind.ACTION,
+                session_id=orch.session_id,
+                payload={
+                    "action": f"INCIDENT_{request.action.upper()}",
+                    "incident_id": incident_id,
+                    "status": status,
+                    "message": f"Incident {request.action}d",
+                    "voice": f"Incident {request.action}d.",
+                },
+            )
+        )
+        return {"incident": updated}
+
     @app.get("/api/v1/live/events")
     async def live_events(limit: int = Query(default=200, ge=1, le=1000)) -> dict[str, object]:
         live = orch.state.snapshot()
         return {"session_id": live["session_id"], "events": live["events"][:limit]}
+
+    @app.get("/api/v1/live/packets")
+    async def live_packets(limit: int = Query(default=100, ge=1, le=300)) -> dict[str, object]:
+        live = orch.state.snapshot()
+        return {"session_id": live["session_id"], "packets": live["packet_feed"][:limit]}
 
     @app.get("/api/v1/history/recent")
     async def history_recent(limit: int = Query(default=100, ge=1, le=1000)) -> dict[str, object]:
@@ -137,15 +188,45 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
             "session_id": snapshot["session_id"],
             "workers": snapshot["workers"],
             "event_bus": snapshot["event_bus"],
+            "voice": orch.voice.status(),
         }
 
     @app.get("/api/v1/system/tools")
     async def system_tools() -> dict[str, object]:
         return {"tools": orch.tools.statuses}
 
+    @app.get("/api/v1/system/voice")
+    async def voice_status() -> dict[str, object]:
+        return orch.voice.status()
+
+    @app.post("/api/v1/system/voice/mute")
+    async def voice_mute(request: VoiceMuteRequest) -> dict[str, object]:
+        orch.voice.mute_for(request.seconds)
+        return orch.voice.status()
+
+    @app.post("/api/v1/system/voice/unmute")
+    async def voice_unmute() -> dict[str, object]:
+        orch.voice.unmute()
+        await orch.bus.publish(
+            Event(
+                source="local-console",
+                kind=EventKind.ACTION,
+                session_id=orch.session_id,
+                payload={
+                    "action": "VOICE_UNMUTED",
+                    "message": "Voice notifications enabled",
+                    "voice": "Voice notifications enabled.",
+                },
+            )
+        )
+        return orch.voice.status()
+
     @app.get("/api/v1/endpoints")
     async def endpoints() -> dict[str, object]:
-        return {"endpoints": orch.control.list(), "control_scope": "EXPLICITLY_ENROLLED_ONLY"}
+        return {
+            "endpoints": orch.control.list(),
+            "control_scope": "EXPLICITLY_ENROLLED_ONLY",
+        }
 
     @app.post("/api/v1/endpoints")
     async def enroll_endpoint(request: EndpointEnrollRequest) -> dict[str, object]:
@@ -159,13 +240,42 @@ def create_app(orchestrator: Orchestrator | None = None) -> FastAPI:
         return {"removed": endpoint_id}
 
     @app.post("/api/v1/endpoints/{endpoint_id}/connect")
-    async def connect_endpoint(endpoint_id: str, request: EndpointConnectRequest) -> dict[str, object]:
+    async def connect_endpoint(
+        endpoint_id: str,
+        request: EndpointConnectRequest,
+    ) -> dict[str, object]:
         try:
             return await orch.control.connect(endpoint_id, request.protocol)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    @app.get("/api/v1/files/status")
+    async def file_status() -> dict[str, object]:
+        return {
+            "staging": str(orch.malware.staging),
+            "yara_rules": str(orch.malware.rules),
+            "evidence_pcap": str(orch.forensic_capture.root),
+        }
+
+    @app.get("/api/v1/evidence/pcap")
+    async def evidence_pcap() -> dict[str, object]:
+        root = orch.forensic_capture.root
+        files = []
+        for path in sorted(root.glob("*.pcapng"), key=lambda item: item.stat().st_mtime, reverse=True):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            files.append(
+                {
+                    "name": path.name,
+                    "size": stat.st_size,
+                    "modified_ns": stat.st_mtime_ns,
+                }
+            )
+        return {"root": str(root), "files": files[:100]}
 
     @app.websocket("/api/v1/live/ws")
     async def live_ws(websocket: WebSocket) -> None:
