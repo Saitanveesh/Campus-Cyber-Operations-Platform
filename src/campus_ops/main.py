@@ -11,6 +11,7 @@ import uvicorn
 from campus_ops.advanced_layer import install_advanced_layer
 from campus_ops.api import create_app
 from campus_ops.config import DEFAULT_SETTINGS
+from campus_ops.enterprise_layer import install_enterprise_layer
 from campus_ops.runtime_ui import install_runtime_extensions
 
 
@@ -44,6 +45,7 @@ def build_app():
         app.add_event_handler = add_event_handler  # type: ignore[attr-defined]
 
     app = install_advanced_layer(app)
+    app = install_enterprise_layer(app)
 
     if startup_handlers or shutdown_handlers:
         original_lifespan = app.router.lifespan_context
