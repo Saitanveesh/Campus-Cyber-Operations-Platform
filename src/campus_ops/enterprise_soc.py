@@ -6,8 +6,10 @@ from collections import Counter
 from typing import Any
 
 from fastapi import FastAPI, Header, Request
+from fastapi.responses import HTMLResponse
 
 from campus_ops.admin_deep import _require_admin
+from campus_ops.soc_ui import SOC_UI_EXTENSION
 
 _IP_RE = re.compile(r"(?<![0-9A-Fa-f:.])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Fa-f:.])")
 _MAC_RE = re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
@@ -220,5 +222,22 @@ def install_enterprise_soc(app: FastAPI) -> FastAPI:
     ) -> dict[str, Any]:
         _require_admin(app, request, x_campus_admin)
         return target_pivot(app, target)
+
+    @app.middleware("http")
+    async def soc_console_extension(request: Request, call_next):
+        response = await call_next(request)
+        if request.method != "GET" or request.url.path != "/":
+            return response
+        content_type = response.headers.get("content-type", "")
+        if "text/html" not in content_type.lower():
+            return response
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        html = body.decode("utf-8", errors="replace")
+        if "view-admin-soc" not in html:
+            html = html.replace("</body>", f"{SOC_UI_EXTENSION}\n</body>")
+        return HTMLResponse(
+            html,
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+        )
 
     return app
