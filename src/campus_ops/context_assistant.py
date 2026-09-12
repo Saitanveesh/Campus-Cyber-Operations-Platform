@@ -78,7 +78,7 @@ def _incident_detail(incident: dict[str, Any]) -> str:
 
     detail = (
         f"{title}, {severity} severity, source {source}, confidence {confidence} percent, "
-        f"with {alert_count} correlated alert{'s' if alert_count != 1 else ''}"
+        f"with {alert_count} distinct correlated alert{'s' if alert_count != 1 else ''}"
     )
     target = evidence.get("target") or evidence.get("destination") or evidence.get("dst")
     if target and str(target) != source:
@@ -97,10 +97,16 @@ def _incident_summary(live: dict[str, Any], limit: int = 2) -> str:
     incidents = _open_incidents(live)
     if not incidents:
         return "There are no open incidents."
-    lead = f"There {'is' if len(incidents) == 1 else 'are'} {len(incidents)} open incident{'s' if len(incidents) != 1 else ''}."
+    lead = (
+        f"There {'is' if len(incidents) == 1 else 'are'} {len(incidents)} open "
+        f"incident{'s' if len(incidents) != 1 else ''}."
+    )
     details = "; ".join(_incident_detail(item) for item in incidents[:limit])
     if len(incidents) > limit:
-        details += f"; and {len(incidents) - limit} more open incident{'s' if len(incidents) - limit != 1 else ''}"
+        details += (
+            f"; and {len(incidents) - limit} more open "
+            f"incident{'s' if len(incidents) - limit != 1 else ''}"
+        )
     return f"{lead} Highest priority: {details}."
 
 
@@ -144,9 +150,8 @@ def page_briefing(snapshot: dict[str, Any], view: str) -> str:
 
     if view == "overview":
         return (
-            f"Overview. Monitoring is running on {interface}. Packet capture is {capture_state}. "
-            f"The current session has {len(assets)} observed assets and {len(flows)} active flows. "
-            f"{_incident_summary(live)}"
+            f"Overview. Monitoring {interface}; capture is {capture_state}. "
+            f"{len(assets)} assets and {len(flows)} active flows. {_incident_summary(live, limit=1)}"
         )
 
     if view == "network":
@@ -157,18 +162,13 @@ def page_briefing(snapshot: dict[str, Any], view: str) -> str:
             and not bool(raw.get("optional"))
             and str(raw.get("state") or "").upper() not in {"HEALTHY", "RUNNING"}
         ]
-        rx = _rate(metrics.get("rx_bps"))
-        tx = _rate(metrics.get("tx_bps"))
         text = (
-            f"Network. {interface} is selected and packet capture is {capture_state}. "
-            f"Receive rate is {rx}; transmit rate is {tx}. "
-            f"Capture has observed {int(_number(capture.get('packets')))} packets. "
-            f"DNS activity totals {int(_number(metrics.get('dns_queries')))} queries."
+            f"Network. {interface}; capture {capture_state}. Receive {_rate(metrics.get('rx_bps'))}, "
+            f"transmit {_rate(metrics.get('tx_bps'))}. "
+            f"{int(_number(capture.get('packets')))} packets observed."
         )
         if unhealthy:
-            text += f" Network workers needing attention: {', '.join(unhealthy[:4])}."
-        else:
-            text += " Required network workers are reporting normally."
+            text += f" Attention: {', '.join(unhealthy[:3])}."
         return text
 
     if view == "topology":
@@ -180,84 +180,56 @@ def page_briefing(snapshot: dict[str, Any], view: str) -> str:
         }
         node_ids.update(str(item.get("ip")) for item in assets if item.get("ip"))
         edge = _top_edge(live)
-        text = (
-            f"Topology. There are {len(node_ids)} observed nodes and {len(edges)} live communication relationships, "
-            f"built from {len(flows)} active flows."
-        )
+        text = f"Topology. {len(node_ids)} observed nodes and {len(edges)} communication relationships."
         if edge:
-            app = (
-                edge.get("last_application")
-                or edge.get("last_tls_sni")
-                or edge.get("last_dns_query")
-                or edge.get("last_http_host")
-                or edge.get("last_protocol")
-                or edge.get("last_transport")
-            )
             text += (
-                f" The busiest visible relationship is {edge.get('source')} to {edge.get('target')}"
-                f" at {_rate(edge.get('bps_ewma'))}"
+                f" Busiest visible link: {edge.get('source')} to {edge.get('target')} at "
+                f"{_rate(edge.get('bps_ewma'))}."
             )
-            if app:
-                text += f", observed as {app}"
-            text += "."
         return text
 
     if view == "assets":
-        roles: dict[str, int] = {}
-        for asset in assets:
-            role = str(asset.get("classification") or asset.get("role") or "UNKNOWN")
-            roles[role] = roles.get(role, 0) + 1
         local = sum(
-            count
-            for role, count in roles.items()
-            if role in {"SENSOR", "INFRASTRUCTURE", "LOCAL_SUBNET_ENDPOINT"}
+            1
+            for asset in assets
+            if str(asset.get("classification") or asset.get("role") or "")
+            in {"SENSOR", "INFRASTRUCTURE", "LOCAL_SUBNET_ENDPOINT"}
         )
-        public = roles.get("PUBLIC_PEER", 0)
-        return (
-            f"Assets. {len(assets)} source-evidenced assets are active in this session. "
-            f"{local} are local or infrastructure assets and {public} are public peers. "
-            "Select an asset to inspect its topology relationships and live flows."
+        public = sum(
+            1
+            for asset in assets
+            if str(asset.get("classification") or asset.get("role") or "") == "PUBLIC_PEER"
         )
+        return f"Assets. {len(assets)} observed assets; {local} local or infrastructure, {public} public peers."
 
     if view == "traffic":
         total_bps = sum(_number(item.get("bps_ewma")) for item in flows)
         total_pps = sum(_number(item.get("pps_ewma")) for item in flows)
         flow = _top_flow(live)
         text = (
-            f"Traffic. {len(flows)} flows are active at an estimated observed rate of {_rate(total_bps)} "
-            f"and {total_pps:.1f} packets per second."
+            f"Traffic. {len(flows)} active flows at about {_rate(total_bps)} and "
+            f"{total_pps:.1f} packets per second."
         )
         if flow:
-            app = flow.get("dns_query") or flow.get("tls_sni") or flow.get("http_host")
-            text += (
-                f" The busiest flow is {flow.get('src')} to {flow.get('dst')} using "
-                f"{flow.get('protocol') or flow.get('transport') or 'unknown protocol'} at {_rate(flow.get('bps_ewma'))}"
-            )
-            if app:
-                text += f", associated with {app}"
-            text += "."
+            text += f" Busiest flow: {flow.get('src')} to {flow.get('dst')}."
         return text
 
     if view == "security":
         alerts = _list(live.get("alerts"))
         risk = _top_risk(metrics)
-        text = f"Security. {_incident_summary(live)} There are {len(alerts)} current alert records."
+        text = f"Security. {_incident_summary(live, limit=1)} {len(alerts)} current alert records."
         if risk:
-            reasons = [str(item) for item in _list(risk.get("reasons"))]
-            text += f" Highest current risk entity is {risk.get('id')} at {int(_number(risk.get('risk')))} out of 100"
-            if reasons:
-                text += f", because of {', '.join(reasons[:2])}"
-            text += "."
+            text += (
+                f" Highest risk entity is {risk.get('id')} at "
+                f"{int(_number(risk.get('risk')))} out of 100."
+            )
         return text
 
     if view == "endpoints":
         agents = [item for item in _list(snapshot.get("managed_agents")) if isinstance(item, dict)]
         online = sum(1 for item in agents if str(item.get("status") or "").upper() == "ONLINE")
         enrolled = _list(snapshot.get("enrolled_endpoints"))
-        return (
-            f"Endpoints. {online} of {len(agents)} managed endpoint agents are online. "
-            f"There are {len(enrolled)} enrolled remote-console endpoints."
-        )
+        return f"Endpoints. {online} of {len(agents)} managed agents online; {len(enrolled)} remote-console endpoints enrolled."
 
     if view == "response":
         jobs = [item for item in _list(snapshot.get("response_jobs")) if isinstance(item, dict)]
@@ -268,10 +240,7 @@ def page_briefing(snapshot: dict[str, Any], view: str) -> str:
             for item in jobs
             if str(item.get("status") or "").upper() in {"FAILED", "REJECTED"}
         )
-        return (
-            f"Response. {len(jobs)} response jobs are recorded: {queued} queued, {active} in progress, "
-            f"and {failed} failed or rejected."
-        )
+        return f"Response. {queued} queued, {active} in progress, {failed} failed or rejected jobs."
 
     if view == "evidence":
         file_events = [
@@ -280,9 +249,8 @@ def page_briefing(snapshot: dict[str, Any], view: str) -> str:
             if isinstance(item, dict) and _dict(item.get("payload")).get("type") == "FILE_ANALYSIS"
         ]
         return (
-            f"Evidence. The current capture has observed {int(_number(capture.get('packets')))} packets. "
-            f"There are {len(file_events)} file-analysis records in this session. "
-            f"{_incident_summary(live, limit=1)}"
+            f"Evidence. {int(_number(capture.get('packets')))} packets observed and "
+            f"{len(file_events)} file-analysis records."
         )
 
     if view == "system":
@@ -290,34 +258,22 @@ def page_briefing(snapshot: dict[str, Any], view: str) -> str:
             name
             for name, raw in workers.items()
             if isinstance(raw, dict)
+            and not bool(raw.get("optional"))
             and str(raw.get("state") or "").upper() not in {"HEALTHY", "RUNNING"}
         ]
         tools = [item for item in _list(snapshot.get("tools")) if isinstance(item, dict)]
         available_tools = sum(1 for item in tools if bool(item.get("available")))
-        voice = _dict(snapshot.get("voice"))
         capabilities = capability_status(snapshot)
         text = (
-            f"System. {len(workers) - len(unhealthy)} of {len(workers)} workers are healthy or running. "
-            f"{available_tools} of {len(tools)} registered tools are available. "
-            f"Capability readiness is {capabilities.get('score', 0)} percent, with "
-            f"{capabilities.get('core_ready', 0)} of {capabilities.get('core_total', 0)} core capabilities ready. "
-            f"The voice engine is {voice.get('engine') or 'not yet selected'}."
+            f"System. {len(workers) - len(unhealthy)} of {len(workers)} workers ready. "
+            f"{available_tools} of {len(tools)} tools available. "
+            f"Capability readiness {capabilities.get('score', 0)} percent."
         )
         if unhealthy:
-            text += f" Workers needing attention: {', '.join(unhealthy[:4])}."
-        gaps = _list(capabilities.get("next_gaps"))
-        if gaps and isinstance(gaps[0], dict):
-            gap = gaps[0]
-            missing = [str(item) for item in _list(gap.get("missing_tools")) + _list(gap.get("missing_workers"))]
-            text += f" Highest-value capability gap is {gap.get('label')}."
-            if missing:
-                text += f" Missing checks include {', '.join(missing[:3])}."
+            text += f" Attention: {', '.join(unhealthy[:3])}."
         return text
 
-    return (
-        "History. This page is separated from the current live session. "
-        "Stored operational events are loaded here on request and are never fed back into live state."
-    )
+    return "History. Stored events are separate from the current live session."
 
 
 def install_context_assistant(app: FastAPI) -> FastAPI:
@@ -335,7 +291,9 @@ def install_context_assistant(app: FastAPI) -> FastAPI:
         voice_status = orchestrator.voice.status()
         muted = bool(voice_status.get("muted"))
         backend_ready = bool(voice_status.get("available")) and not muted
-        queued = backend_ready and orchestrator.voice.queue_speech(text, priority=18)
+        queued = await orchestrator.voice.replace_speech(text, priority=18) if backend_ready else False
+        if not backend_ready:
+            await orchestrator.voice.cancel_speech(clear_queue=True)
         return {
             "view": view,
             "text": text,
