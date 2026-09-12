@@ -57,6 +57,7 @@ from campus_ops.workers.topology_engine import TopologyEngineWorker
 from campus_ops.workers.traffic_baseline import TrafficBaselineWorker
 from campus_ops.workers.voice import VoiceAlertWorker
 from campus_ops.workers.wifi_telemetry import WifiTelemetryWorker
+from campus_ops.workers.windows_security import WindowsSecurityTelemetryWorker
 
 
 class Orchestrator:
@@ -70,6 +71,7 @@ class Orchestrator:
             "flow-telemetry-receiver",
             "snmp-poller",
             "wifi-telemetry",
+            "windows-security-telemetry",
         }
     )
 
@@ -172,6 +174,7 @@ class Orchestrator:
             interval=1.0,
         )
         self.local_host = LocalHostTelemetryWorker(self.bus, self.state, interval=3.0)
+        self.windows_security = WindowsSecurityTelemetryWorker(self.bus, self.state, interval=30.0)
         self.wifi = WifiTelemetryWorker(self.bus, self.state, self.get_session_id)
         self.syslog = SyslogReceiverWorker(self.bus, self.get_session_id)
         self.flow_receiver = FlowTelemetryReceiverWorker(self.bus, self.get_session_id)
@@ -239,6 +242,7 @@ class Orchestrator:
             self.malware,
             self.telemetry,
             self.local_host,
+            self.windows_security,
             self.wifi,
             self.syslog,
             self.flow_receiver,
