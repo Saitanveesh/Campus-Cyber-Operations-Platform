@@ -19,6 +19,7 @@ class FlowEngineWorker(BaseWorker):
         self.session_provider = session_provider
         self.network_provider = network_provider
         self._last_event_at: dict[str, float] = {}
+        self._rate_session: str | None = None
 
     @staticmethod
     def _ewma(previous: object, current: float, alpha: float = 0.22) -> float:
@@ -51,6 +52,9 @@ class FlowEngineWorker(BaseWorker):
                 session_id = self.session_provider()
                 if not session_id or event.session_id != session_id or event.kind != EventKind.OBSERVATION:
                     continue
+                if self._rate_session != session_id:
+                    self._rate_session = session_id
+                    self._last_event_at.clear()
                 payload = dict(event.payload)
                 kind = str(payload.get("type") or "")
                 if kind not in {"PACKET", "FLOW_TELEMETRY"}:
