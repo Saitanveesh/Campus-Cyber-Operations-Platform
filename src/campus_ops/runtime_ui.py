@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
 from campus_ops.topology_ui import TOPOLOGY_EXTENSION
+from campus_ops.traffic_ui import TRAFFIC_EXTENSION
 
 
 UI_EXTENSION = r"""
@@ -110,7 +111,7 @@ def _clean_console_copy(html: str) -> str:
 
 
 def install_runtime_extensions(app: FastAPI) -> FastAPI:
-    """Install watchdog, assistant and advanced topology runtime extensions."""
+    """Install watchdog, assistant, topology and live traffic runtime extensions."""
     if getattr(app.state, "runtime_extensions_installed", False):
         return app
     app.state.runtime_extensions_installed = True
@@ -147,7 +148,7 @@ def install_runtime_extensions(app: FastAPI) -> FastAPI:
             html = _clean_console_copy(html)
             extended = html.replace(
                 "</body>",
-                f"{UI_EXTENSION}\n{TOPOLOGY_EXTENSION}\n</body>",
+                f"{UI_EXTENSION}\n{TOPOLOGY_EXTENSION}\n{TRAFFIC_EXTENSION}\n</body>",
             )
             return HTMLResponse(
                 extended,
