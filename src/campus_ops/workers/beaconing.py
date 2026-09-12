@@ -4,6 +4,7 @@ import ipaddress
 import statistics
 import time
 from collections import defaultdict, deque
+from itertools import pairwise
 
 from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, Severity, WorkerState
@@ -14,7 +15,7 @@ from campus_ops.workers.base import BaseWorker
 def periodicity_score(values: list[float]) -> tuple[float, float] | None:
     if len(values) < 8:
         return None
-    intervals = [b - a for a, b in zip(values, values[1:], strict=False) if b > a]
+    intervals = [b - a for a, b in pairwise(values) if b > a]
     if len(intervals) < 7:
         return None
     median = statistics.median(intervals)
