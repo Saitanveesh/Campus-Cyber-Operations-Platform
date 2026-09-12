@@ -90,6 +90,14 @@ CAPABILITIES: tuple[CapabilitySpec, ...] = (
         ("beaconing-watch",),
     ),
     CapabilitySpec(
+        "threat_watchlist",
+        "IOC Watchlist",
+        "INTELLIGENCE",
+        "Match operator-supplied IP, domain and SHA-256 indicators against live telemetry.",
+        (),
+        ("ioc-watch",),
+    ),
+    CapabilitySpec(
         "windows_security_posture",
         "Windows Security Posture",
         "ENDPOINT",
