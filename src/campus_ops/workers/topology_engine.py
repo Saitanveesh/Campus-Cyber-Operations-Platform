@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,6 +19,7 @@ class TopologyEngineWorker(BaseWorker):
         self.state = state
         self.session_provider = session_provider
         self.network_provider = network_provider
+        self._last_event_at: dict[str, float] = {}
 
     @staticmethod
     def _count(previous: object, value: object) -> dict[str, int]:
@@ -48,6 +50,28 @@ class TopologyEngineWorker(BaseWorker):
             if value:
                 return value
         return None
+
+    @staticmethod
+    def _ewma(previous: object, current: float, alpha: float = 0.22) -> float:
+        try:
+            old = float(previous)
+        except (TypeError, ValueError):
+            old = current
+        return round((alpha * current) + ((1.0 - alpha) * old), 2)
+
+    def _rates(self, key: str, packets: int, octets: int, previous: dict[str, Any]) -> tuple[float, float]:
+        now = time.monotonic()
+        prior = self._last_event_at.get(key)
+        self._last_event_at[key] = now
+        if prior is None:
+            return float(previous.get("pps_ewma") or 0.0), float(previous.get("bps_ewma") or 0.0)
+        elapsed = max(0.001, now - prior)
+        instant_pps = packets / elapsed
+        instant_bps = (octets * 8.0) / elapsed
+        return (
+            self._ewma(previous.get("pps_ewma"), instant_pps),
+            self._ewma(previous.get("bps_ewma"), instant_bps),
+        )
 
     async def run(self) -> None:
         sub = await self.bus.subscribe(self.name)
@@ -91,6 +115,7 @@ class TopologyEngineWorker(BaseWorker):
                     limit=8,
                 )
                 vlans = self._remember(previous.get("vlans"), vlan_id, limit=8)
+                pps_ewma, bps_ewma = self._rates(key, packets, octets, previous)
 
                 self.state.upsert_edge(
                     key,
@@ -106,6 +131,8 @@ class TopologyEngineWorker(BaseWorker):
                         "observations": int(previous.get("observations", 0)) + 1,
                         "packets": int(previous.get("packets", 0)) + packets,
                         "bytes": int(previous.get("bytes", 0)) + octets,
+                        "pps_ewma": pps_ewma,
+                        "bps_ewma": bps_ewma,
                         "protocols": protocol_counts,
                         "transports": transport_counts,
                         "source_ports": source_ports,
