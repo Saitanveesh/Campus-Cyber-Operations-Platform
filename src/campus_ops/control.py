@@ -19,6 +19,7 @@ class EnrolledEndpoint:
     platform: Literal["windows", "linux", "other"]
     allow_rdp: bool = False
     allow_ssh: bool = False
+    ssh_user: str = ""
 
 
 def default_registry_path() -> Path:
@@ -104,11 +105,13 @@ class EndpointControl:
                 stderr=asyncio.subprocess.DEVNULL,
             )
             return
+
+        ssh_target = f"{endpoint.ssh_user}@{endpoint.host}" if endpoint.ssh_user else endpoint.host
         if await self._windows_terminal_available():
             await asyncio.create_subprocess_exec(
                 "wt.exe",
                 "ssh",
-                endpoint.host,
+                ssh_target,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
@@ -117,7 +120,7 @@ class EndpointControl:
                 "cmd.exe",
                 "/k",
                 "ssh",
-                endpoint.host,
+                ssh_target,
             )
 
     async def connect(
@@ -145,7 +148,6 @@ class EndpointControl:
                     "endpoint_id": endpoint.endpoint_id,
                     "protocol": protocol,
                     "message": f"Connecting to {endpoint.name}",
-                    "voice": f"Connecting to {endpoint.name}. Please wait.",
                 },
             )
         )
@@ -162,7 +164,6 @@ class EndpointControl:
                         "endpoint_id": endpoint.endpoint_id,
                         "protocol": protocol,
                         "message": f"Connection to {endpoint.name} failed: service unreachable",
-                        "voice": f"Connection to {endpoint.name} failed. Service is unreachable.",
                     },
                 )
             )
@@ -180,8 +181,12 @@ class EndpointControl:
                     "endpoint_id": endpoint.endpoint_id,
                     "protocol": protocol,
                     "message": f"Connection service available on {endpoint.name}",
-                    "voice": f"Connection to {endpoint.name} is available. Opening {protocol.upper()}.",
                 },
             )
         )
-        return {"status": "LAUNCHED", "protocol": protocol, "host": endpoint.host}
+        return {
+            "status": "LAUNCHED",
+            "protocol": protocol,
+            "host": endpoint.host,
+            "ssh_user": endpoint.ssh_user if protocol == "ssh" else "",
+        }
