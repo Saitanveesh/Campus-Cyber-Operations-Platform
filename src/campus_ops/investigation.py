@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from campus_ops.policy import Role
 from campus_ops.tooling.registry import resolve_executable
 
 
@@ -132,7 +133,9 @@ def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]
         total_packets += int(_number(flow.get("packets")))
         total_bytes += int(_number(flow.get("bytes")))
         observed_bps += _number(flow.get("bps_ewma"))
-        peer = str(flow.get("dst") if str(flow.get("src") or "") == target else flow.get("src") or "")
+        peer = str(
+            flow.get("dst") if str(flow.get("src") or "") == target else flow.get("src") or ""
+        )
         if peer:
             peers[peer] = peers.get(peer, 0) + int(_number(flow.get("packets")))
         port = str(flow.get("dst_port") or "")
@@ -146,8 +149,12 @@ def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]
 
     risk_score = int(_number((risk or {}).get("risk")))
     reasons: list[str] = [str(item) for item in (risk or {}).get("reasons", []) if item]
-    open_incidents = [item for item in incidents if str(item.get("status") or "OPEN").upper() != "CLOSED"]
-    critical = sum(1 for item in open_incidents if str(item.get("severity") or "").upper() == "CRITICAL")
+    open_incidents = [
+        item for item in incidents if str(item.get("status") or "OPEN").upper() != "CLOSED"
+    ]
+    critical = sum(
+        1 for item in open_incidents if str(item.get("severity") or "").upper() == "CRITICAL"
+    )
     high = sum(1 for item in open_incidents if str(item.get("severity") or "").upper() == "HIGH")
     if critical:
         risk_score = max(risk_score, 90)
@@ -305,6 +312,14 @@ def deep_probe(target: str, include_services: bool) -> dict[str, object]:
     }
 
 
+def _target_agent(orchestrator: Any, target: str) -> tuple[str, dict[str, Any]]:
+    investigation = build_investigation(orchestrator.snapshot(), target)
+    agent = investigation.get("managed_agent")
+    if not isinstance(agent, dict) or not agent.get("endpoint_id"):
+        raise LookupError("this IP is not backed by an enrolled endpoint agent")
+    return str(agent["endpoint_id"]), investigation
+
+
 def install_investigation_routes(app: FastAPI) -> FastAPI:
     if getattr(app.state, "investigation_routes_installed", False):
         return app
@@ -327,5 +342,56 @@ def install_investigation_routes(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    @app.post("/api/v1/investigate/{target}/snapshot")
+    async def investigate_snapshot(target: str) -> dict[str, object]:
+        orchestrator = app.state.orchestrator
+        try:
+            endpoint_id, investigation = _target_agent(orchestrator, target)
+            job = await orchestrator.response.queue(
+                endpoint_id=endpoint_id,
+                action="COLLECT_SNAPSHOT",
+                role=Role.INCIDENT_RESPONDER,
+                operator="investigation-center",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"job": job, "target": investigation["target"]}
+
+    @app.post("/api/v1/investigate/{target}/isolate")
+    async def investigate_isolate(target: str) -> dict[str, object]:
+        orchestrator = app.state.orchestrator
+        try:
+            endpoint_id, investigation = _target_agent(orchestrator, target)
+            job = await orchestrator.response.queue(
+                endpoint_id=endpoint_id,
+                action="ISOLATE_HOST",
+                role=Role.LAB_ADMINISTRATOR,
+                operator="investigation-center",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"job": job, "target": investigation["target"]}
+
+    @app.post("/api/v1/investigate/{target}/restore")
+    async def investigate_restore(target: str) -> dict[str, object]:
+        orchestrator = app.state.orchestrator
+        try:
+            endpoint_id, investigation = _target_agent(orchestrator, target)
+            job = await orchestrator.response.queue(
+                endpoint_id=endpoint_id,
+                action="RESTORE_NETWORK",
+                role=Role.LAB_ADMINISTRATOR,
+                operator="investigation-center",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"job": job, "target": investigation["target"]}
 
     return app
