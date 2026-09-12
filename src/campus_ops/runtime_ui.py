@@ -5,6 +5,8 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
+from campus_ops.context_assistant import install_context_assistant, page_briefing
+from campus_ops.context_ui import CONTEXT_EXTENSION
 from campus_ops.topology_ui import TOPOLOGY_EXTENSION
 from campus_ops.traffic_ui import TRAFFIC_EXTENSION
 
@@ -66,8 +68,11 @@ function renderAssistant(d){
   const backendState=v.available?(v.last_error?'DEGRADED':'READY'):'UNAVAILABLE';
   const browserState=browserAvailable()?'READY':'UNAVAILABLE';
   if(byId('assistantSystemKv'))byId('assistantSystemKv').innerHTML=[['Backend',backendState],['Engine',v.engine||'—'],['Speaking',v.speaking?'YES':'NO'],['Queue',v.queue_depth||0],['Muted',v.muted?'YES':'NO'],['Browser Fallback',browserState],['Last Spoken',v.last_spoken||'—'],['Last Error',v.last_error||'—']].flatMap(x=>[`<div>${esc2(x[0])}</div>`,`<div>${esc2(x[1])}</div>`]).join('');
-  const open=(live.incidents||[]).filter(i=>String(i.status||'OPEN').toUpperCase()!=='CLOSED').length;
-  const transcript=`Watching ${esc2((d.network||{}).interface||'network')} · capture ${esc2(capture.state||'unknown')} · ${Number((live.assets||[]).length)} assets · ${Number((live.flows||[]).length)} flows · ${open} open incidents · ${Number(w.active_count||0)} watch conditions.`;
+  const openItems=(live.incidents||[]).filter(i=>String(i.status||'OPEN').toUpperCase()!=='CLOSED');
+  openItems.sort((a,b)=>String(b.last_seen||'').localeCompare(String(a.last_seen||'')));
+  const incident=openItems[0];
+  const incidentText=incident?` · incident ${esc2(incident.title||'unnamed')} (${esc2(incident.severity||'')})`:'';
+  const transcript=`Watching ${esc2((d.network||{}).interface||'network')} · capture ${esc2(capture.state||'unknown')} · ${Number((live.assets||[]).length)} assets · ${Number((live.flows||[]).length)} flows · ${openItems.length} open incidents${incidentText} · ${Number(w.active_count||0)} watch conditions.`;
   if(byId('assistantTranscript'))byId('assistantTranscript').innerHTML=transcript;
   handleBrowserFallback(d);
 }
@@ -86,8 +91,9 @@ function handleBrowserFallback(d){
   if(seenEvents.size>2000)seenEvents=new Set(events.slice(0,500).map(e=>e.event_id).filter(Boolean));
 }
 async function briefMe(){
+  if(typeof window.contextualOperationsBrief==='function'){window.contextualOperationsBrief(document.querySelector('.tab.active')?.dataset?.view||'overview',true);return;}
   const targets=[byId('assistantMessage'),byId('assistantSystemMessage')].filter(Boolean);targets.forEach(x=>x.textContent='Preparing live briefing...');
-  try{const r=await fetch('/api/v1/system/assistant/brief',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.detail||'Briefing failed');targets.forEach(x=>x.textContent=d.text||'Briefing queued');if(!d.queued)browserSpeak(d.text,true);setTimeout(getStatus,1200);}catch(e){targets.forEach(x=>x.textContent=e.message);if(assistantData){const w=assistantData.watchdog||{};browserSpeak(`Watchdog state is ${w.state||'unknown'} with ${w.active_count||0} active conditions.`,true);}}
+  try{const r=await fetch('/api/v1/system/assistant/brief',{method:'POST'}),d=await r.json();if(!r.ok)throw new Error(d.detail||'Briefing failed');targets.forEach(x=>x.textContent=d.text||'Briefing queued');if(!d.queued&&!d.muted)browserSpeak(d.text,true);setTimeout(getStatus,1200);}catch(e){targets.forEach(x=>x.textContent=e.message);if(assistantData){const w=assistantData.watchdog||{};browserSpeak(`Watchdog state is ${w.state||'unknown'} with ${w.active_count||0} active conditions.`,true);}}
 }
 async function testBackend(){const m=byId('assistantSystemMessage');if(m)m.textContent='Testing backend audio...';try{const r=await fetch('/api/v1/system/voice/test',{method:'POST'}),d=await r.json();if(m)m.textContent=d.test_success?'Backend audio passed':`Backend audio failed: ${d.last_error||'unknown error'}`;if(!d.test_success)browserSpeak('Backend audio failed. Browser voice fallback is active.',true);}catch(e){if(m)m.textContent=e.message;browserSpeak('Browser voice fallback is active.',true);}}
 document.addEventListener('pointerdown',()=>{const v=(assistantData||{}).voice||{};if((!v.available||v.last_error)&&!v.last_spoken)browserSpeak('Welcome back.',true);},{once:true});
@@ -115,6 +121,7 @@ def install_runtime_extensions(app: FastAPI) -> FastAPI:
     if getattr(app.state, "runtime_extensions_installed", False):
         return app
     app.state.runtime_extensions_installed = True
+    install_context_assistant(app)
 
     @app.get("/api/v1/system/watchdog")
     async def watchdog_status() -> dict[str, object]:
@@ -125,14 +132,15 @@ def install_runtime_extensions(app: FastAPI) -> FastAPI:
     async def assistant_brief() -> dict[str, object]:
         orch = app.state.orchestrator
         snapshot = orch.snapshot()
-        text = orch.watchdog.briefing(snapshot)
-        text = text.replace("Sai Tanveesh, ", "").replace("Sai Tanveesh", "").strip()
+        text = page_briefing(snapshot, "overview")
         voice_status = orch.voice.status()
-        backend_ready = bool(voice_status.get("available")) and not bool(voice_status.get("muted"))
+        muted = bool(voice_status.get("muted"))
+        backend_ready = bool(voice_status.get("available")) and not muted
         queued = backend_ready and orch.voice.queue_speech(text, priority=20)
         return {
             "text": text,
             "queued": bool(queued),
+            "muted": muted,
             "voice": orch.voice.status(),
             "watchdog": orch.watchdog.status(),
         }
@@ -148,7 +156,7 @@ def install_runtime_extensions(app: FastAPI) -> FastAPI:
             html = _clean_console_copy(html)
             extended = html.replace(
                 "</body>",
-                f"{UI_EXTENSION}\n{TOPOLOGY_EXTENSION}\n{TRAFFIC_EXTENSION}\n</body>",
+                f"{UI_EXTENSION}\n{CONTEXT_EXTENSION}\n{TOPOLOGY_EXTENSION}\n{TRAFFIC_EXTENSION}\n</body>",
             )
             return HTMLResponse(
                 extended,
