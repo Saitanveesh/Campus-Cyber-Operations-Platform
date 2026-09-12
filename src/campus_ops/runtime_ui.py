@@ -15,6 +15,8 @@ from campus_ops.context_assistant import install_context_assistant, page_briefin
 from campus_ops.context_ui import CONTEXT_EXTENSION
 from campus_ops.investigation import install_investigation_routes
 from campus_ops.investigation_ui import INVESTIGATION_EXTENSION
+from campus_ops.ioc_api import install_ioc_routes
+from campus_ops.ioc_ui import IOC_EXTENSION
 from campus_ops.topology_ui import TOPOLOGY_EXTENSION
 from campus_ops.traffic_ui import TRAFFIC_EXTENSION
 
@@ -83,6 +85,7 @@ def install_runtime_extensions(app: FastAPI) -> FastAPI:
     install_investigation_routes(app)
     install_admin_routes(app)
     install_admin_deep_routes(app)
+    install_ioc_routes(app)
 
     @app.get("/api/v1/system/watchdog")
     async def watchdog_status() -> dict[str, object]:
@@ -116,7 +119,7 @@ def install_runtime_extensions(app: FastAPI) -> FastAPI:
             html = _clean_console_copy(html)
             extended = html.replace(
                 "</body>",
-                f"{UI_EXTENSION}\n{CONTEXT_EXTENSION}\n{CAPABILITY_EXTENSION}\n{INVESTIGATION_EXTENSION}\n{TOPOLOGY_EXTENSION}\n{TRAFFIC_EXTENSION}\n{ADMIN_EXTENSION}\n{ADMIN_DEEP_EXTENSION}\n</body>",
+                f"{UI_EXTENSION}\n{CONTEXT_EXTENSION}\n{CAPABILITY_EXTENSION}\n{INVESTIGATION_EXTENSION}\n{TOPOLOGY_EXTENSION}\n{TRAFFIC_EXTENSION}\n{ADMIN_EXTENSION}\n{ADMIN_DEEP_EXTENSION}\n{IOC_EXTENSION}\n</body>",
             )
             return HTMLResponse(extended, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
         return await call_next(request)
