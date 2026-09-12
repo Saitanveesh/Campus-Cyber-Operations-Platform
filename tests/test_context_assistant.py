@@ -42,6 +42,7 @@ def _snapshot() -> dict[str, object]:
                     "severity": "MEDIUM",
                     "confidence": 82,
                     "alert_count": 4,
+                    "alert_types": ["Suspicious fan-out"],
                     "status": "OPEN",
                     "last_seen": "2026-09-12T01:00:00+00:00",
                     "latest_evidence": {"unique_destinations": 17},
@@ -64,7 +65,7 @@ def test_security_brief_identifies_incident_and_confidence():
     text = page_briefing(_snapshot(), "security")
     assert "Suspicious fan-out" in text
     assert "confidence 82 percent" in text
-    assert "4 distinct correlated alerts" in text
+    assert "1 correlated signal type" in text
 
 
 def test_topology_brief_identifies_busiest_relationship():
