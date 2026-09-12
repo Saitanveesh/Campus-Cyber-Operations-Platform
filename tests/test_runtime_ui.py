@@ -8,7 +8,9 @@ def test_runtime_app_installs_watchdog_and_assistant_routes(tmp_path, monkeypatc
     paths = {getattr(route, "path", "") for route in app.routes}
     assert "/api/v1/system/watchdog" in paths
     assert "/api/v1/system/assistant/brief" in paths
+    assert "/api/v1/system/assistant/context/{view}" in paths
     assert app.state.runtime_extensions_installed is True
+    assert app.state.context_assistant_installed is True
 
 
 def test_console_copy_removes_old_taglines():
