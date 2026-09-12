@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse
 from campus_ops.admin import install_admin_routes
 from campus_ops.admin_deep import install_admin_deep_routes
 from campus_ops.admin_deep_ui import ADMIN_DEEP_EXTENSION
+from campus_ops.admin_layout_ui import ADMIN_LAYOUT_EXTENSION
 from campus_ops.admin_ui import ADMIN_EXTENSION
 from campus_ops.capabilities import install_capability_routes
 from campus_ops.capability_ui import CAPABILITY_EXTENSION
@@ -36,7 +37,7 @@ UI_EXTENSION = r"""
 (()=>{
 const byId=id=>document.getElementById(id);
 let assistantData=null,eventsInitialized=false,seenEvents=new Set(),lastBrowserText='',lastBrowserAt=0;
-function esc2(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function esc2(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]));}
 function cleanCopy(){const pattern=/(evidence-first|black\s*\/\s*white\s*\/\s*grey|authorized cyber-range|current_session_only|live contract)/i;document.querySelectorAll('.product,.subtitle,.note,.foot span').forEach(el=>{if(pattern.test(el.textContent||''))el.textContent='';});}
 function injectPanels(){
   const overview=byId('view-overview'),system=byId('view-system');
@@ -123,7 +124,7 @@ def install_runtime_extensions(app: FastAPI) -> FastAPI:
             html = _clean_console_copy(html)
             extended = html.replace(
                 "</body>",
-                f"{UI_EXTENSION}\n{CONTEXT_EXTENSION}\n{CAPABILITY_EXTENSION}\n{INVESTIGATION_EXTENSION}\n{TOPOLOGY_EXTENSION}\n{PATHSPACE_EXTENSION}\n{TRAFFIC_EXTENSION}\n{ADMIN_EXTENSION}\n{ADMIN_DEEP_EXTENSION}\n{IOC_EXTENSION}\n{ENTERPRISE_UI_EXTENSION}\n{RED_PANEL_EXTENSION}\n{LINK_STATE_EXTENSION}\n</body>",
+                f"{UI_EXTENSION}\n{CONTEXT_EXTENSION}\n{CAPABILITY_EXTENSION}\n{INVESTIGATION_EXTENSION}\n{TOPOLOGY_EXTENSION}\n{PATHSPACE_EXTENSION}\n{TRAFFIC_EXTENSION}\n{ADMIN_EXTENSION}\n{ADMIN_DEEP_EXTENSION}\n{IOC_EXTENSION}\n{ENTERPRISE_UI_EXTENSION}\n{RED_PANEL_EXTENSION}\n{LINK_STATE_EXTENSION}\n{ADMIN_LAYOUT_EXTENSION}\n</body>",
             )
             return HTMLResponse(extended, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
         return await call_next(request)
