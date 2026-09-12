@@ -82,13 +82,25 @@ class EnterpriseFusionEngine:
         self.global_events: deque[dict[str, Any]] = deque(maxlen=500)
         self._task: asyncio.Task[None] | None = None
         self._subscription = None
+        self._session_id: str | None = None
         self.processed = 0
         self.last_event_at: float | None = None
+
+    def _reset_session(self, session_id: str | None) -> None:
+        self._session_id = session_id
+        self.host_events.clear()
+        self.host_risk.clear()
+        self.host_sources.clear()
+        self.global_events.clear()
+        self.processed = 0
+        self.last_event_at = None
+        self._publish_metrics()
 
     async def start(self) -> None:
         if self._task and not self._task.done():
             return
         orch = self.app.state.orchestrator
+        self._session_id = orch.session_id
         self._subscription = await orch.bus.subscribe("enterprise-fusion")
         self._task = asyncio.create_task(self.run(), name="enterprise-fusion")
 
@@ -106,7 +118,11 @@ class EnterpriseFusionEngine:
         while True:
             event = await self._subscription.queue.get()
             current_session = self.app.state.orchestrator.session_id
-            if event.session_id and current_session and event.session_id != current_session:
+            if current_session != self._session_id:
+                self._reset_session(current_session)
+            if not current_session:
+                continue
+            if event.session_id and event.session_id != current_session:
                 continue
             if event.kind not in {
                 EventKind.OBSERVATION,
@@ -137,6 +153,7 @@ class EnterpriseFusionEngine:
         ranked = sorted(self.host_risk.items(), key=lambda item: item[1], reverse=True)[:25]
         state.update_metrics(
             enterprise_fusion={
+                "session_id": self._session_id,
                 "processed_events": self.processed,
                 "tracked_hosts": len(self.host_events),
                 "last_event_at": self.last_event_at,
@@ -162,7 +179,12 @@ class EnterpriseFusionEngine:
             "counts_by_source": dict(sorted(by_source.items(), key=lambda item: item[1], reverse=True)),
             "timeline": events[:150],
             "asset": next(
-                (row for row in live.get("assets", []) if isinstance(row, dict) and target in {str(row.get("ip") or ""), str(row.get("address") or "")}),
+                (
+                    row
+                    for row in live.get("assets", [])
+                    if isinstance(row, dict)
+                    and target in {str(row.get("ip") or ""), str(row.get("address") or "")}
+                ),
                 None,
             ),
             "truth_state": "EVIDENCE_PRESENT" if events else "NO_CURRENT_SESSION_EVIDENCE",
@@ -172,6 +194,7 @@ class EnterpriseFusionEngine:
         ranked = sorted(self.host_risk.items(), key=lambda item: item[1], reverse=True)[:25]
         return {
             "state": "ACTIVE" if self._task and not self._task.done() else "STOPPED",
+            "session_id": self._session_id,
             "processed_events": self.processed,
             "tracked_hosts": len(self.host_events),
             "last_event_at": self.last_event_at,
@@ -262,7 +285,12 @@ class ZeekLogAdapter:
         kind = EventKind.ALERT if log_name == "notice.log" else EventKind.OBSERVATION
         severity = Severity.MEDIUM if kind == EventKind.ALERT else Severity.INFO
         if kind == EventKind.ALERT:
-            payload.update({"title": row.get("msg") or row.get("note") or "Zeek notice", "confidence": 80})
+            payload.update(
+                {
+                    "title": row.get("msg") or row.get("note") or "Zeek notice",
+                    "confidence": 80,
+                }
+            )
         await orch.bus.publish(
             Event(
                 source="zeek-adapter",
@@ -333,7 +361,11 @@ class EnterpriseToolBroker:
                     "available": bool(native or wsl),
                     "mode": "NATIVE" if native else ("WSL" if wsl else "UNAVAILABLE"),
                     "path": native or wsl,
-                    "execution_policy": "OPERATOR_INITIATED" if key in {"snmpwalk", "snmpget", "arp-scan"} else "ANALYSIS_ONLY",
+                    "execution_policy": (
+                        "OPERATOR_INITIATED"
+                        if key in {"snmpwalk", "snmpget", "arp-scan"}
+                        else "ANALYSIS_ONLY"
+                    ),
                 }
             )
         self._cache = rows
