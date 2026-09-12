@@ -11,6 +11,7 @@ import uvicorn
 from campus_ops.advanced_layer import install_advanced_layer
 from campus_ops.api import create_app
 from campus_ops.config import DEFAULT_SETTINGS
+from campus_ops.correlation_fabric import install_correlation_fabric
 from campus_ops.depth_engines import install_depth_engines
 from campus_ops.enterprise_cases import install_enterprise_cases
 from campus_ops.enterprise_detection import install_enterprise_detection
@@ -54,6 +55,7 @@ def build_app():
     app = install_network_depth_layer(app)
     app = install_enterprise_detection(app)
     app = install_depth_engines(app)
+    app = install_correlation_fabric(app)
     app = install_enterprise_operations(app)
     app = install_enterprise_cases(app)
     app = install_enterprise_soc(app)
