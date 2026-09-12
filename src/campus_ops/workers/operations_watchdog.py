@@ -86,7 +86,7 @@ class OperationsWatchdogWorker(BaseWorker):
                     Severity.HIGH,
                     "Packet capture needs attention",
                     detail,
-                    "Sai Tanveesh, packet capture needs attention.",
+                    "Packet capture needs attention.",
                 )
                 conditions[key] = value
             elif capture_state in {"STARTING", "WAITING", "READY_FOR_CAPTURE"}:
@@ -314,6 +314,21 @@ class OperationsWatchdogWorker(BaseWorker):
             return 180.0
         return 600.0
 
+    @staticmethod
+    def _incident_voice_detail(incident: dict[str, object]) -> str:
+        title = str(incident.get("title") or "unnamed incident")
+        severity = str(incident.get("severity") or "unknown").lower()
+        source = str(incident.get("source") or "unknown source")
+        evidence = incident.get("latest_evidence") if isinstance(incident.get("latest_evidence"), dict) else {}
+        detail = f"highest priority is {title}, {severity} severity, source {source}"
+        target = evidence.get("target") or evidence.get("destination") or evidence.get("dst")
+        if target and str(target) != source:
+            detail += f", targeting {target}"
+        fanout = evidence.get("unique_destinations") or evidence.get("destination_count") or evidence.get("distinct_destinations")
+        if fanout:
+            detail += f", touching {fanout} destinations"
+        return detail
+
     @classmethod
     def briefing(cls, snapshot: dict[str, object]) -> str:
         live = snapshot.get("live") if isinstance(snapshot.get("live"), dict) else {}
@@ -321,7 +336,7 @@ class OperationsWatchdogWorker(BaseWorker):
         network = snapshot.get("network") if isinstance(snapshot.get("network"), dict) else {}
         session_id = snapshot.get("session_id")
         if not session_id:
-            return "Sai Tanveesh, there is no active monitoring session right now."
+            return "There is no active monitoring session right now."
 
         interface = str(network.get("interface") or "the selected interface")
         capture_state = str(capture.get("state") or "unknown").replace("_", " ").lower()
@@ -333,6 +348,15 @@ class OperationsWatchdogWorker(BaseWorker):
             for item in incidents
             if isinstance(item, dict) and str(item.get("status") or "OPEN").upper() != "CLOSED"
         ]
+        severity_rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
+        open_incidents.sort(
+            key=lambda item: (
+                severity_rank.get(str(item.get("severity") or "INFO").upper(), 0),
+                int(item.get("confidence") or 0),
+                str(item.get("last_seen") or ""),
+            ),
+            reverse=True,
+        )
         critical = sum(
             1
             for item in open_incidents
@@ -352,7 +376,7 @@ class OperationsWatchdogWorker(BaseWorker):
         watch = cls.evaluate(snapshot)
 
         parts = [
-            f"Sai Tanveesh, monitoring is running on {interface}",
+            f"Monitoring is running on {interface}",
             f"packet capture is {capture_state}",
             f"I can currently see {len(assets)} assets and {len(flows)} active flows",
         ]
@@ -360,6 +384,7 @@ class OperationsWatchdogWorker(BaseWorker):
             parts.append(
                 f"there are {len(open_incidents)} open incidents, including {critical} critical and {high} high severity"
             )
+            parts.append(cls._incident_voice_detail(open_incidents[0]))
         else:
             parts.append("there are no open incidents")
         if agents:
