@@ -1,6 +1,3 @@
-from __future__ import annotations
-
-
 TRAFFIC_EXTENSION = r"""
 <style>
 .traffic-live-grid{display:grid;grid-template-columns:repeat(6,1fr);border-left:1px solid #c7c7c7;border-top:1px solid #c7c7c7;margin-bottom:16px}
