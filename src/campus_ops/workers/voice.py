@@ -15,7 +15,7 @@ from campus_ops.workers.base import BaseWorker
 class VoiceAlertWorker(BaseWorker):
     """Priority voice assistant for continuous Windows operational announcements."""
 
-    STARTUP_GREETING = "Welcome back, Sai Tanveesh. Live Operations Console is starting."
+    STARTUP_GREETING = "Welcome back."
 
     def __init__(self, bus: EventBus, session_provider) -> None:
         super().__init__("voice-alert", bus)
