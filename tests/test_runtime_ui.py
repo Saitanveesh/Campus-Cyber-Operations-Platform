@@ -9,6 +9,7 @@ def test_runtime_app_installs_watchdog_assistant_and_investigation_routes(tmp_pa
     assert "/api/v1/system/watchdog" in paths
     assert "/api/v1/system/assistant/brief" in paths
     assert "/api/v1/system/assistant/context/{view}" in paths
+    assert "/api/v1/system/assistant/stop" in paths
     assert "/api/v1/system/voice/stop" in paths
     assert "/api/v1/system/capabilities" in paths
     assert "/api/v1/system/diagnostics/{check}" in paths
