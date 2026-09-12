@@ -34,12 +34,16 @@ def test_runtime_app_installs_watchdog_assistant_investigation_and_admin_routes(
     assert "/api/v1/admin/deep/{target}/terminate" in paths
     assert "/api/v1/admin/deep/{target}/block-peer" in paths
     assert "/api/v1/admin/deep/{target}/quarantine" in paths
+    assert "/api/v1/admin/iocs" in paths
+    assert "/api/v1/admin/iocs/{indicator_id}" in paths
+    assert "/api/v1/admin/iocs/matches/live" in paths
     assert app.state.runtime_extensions_installed is True
     assert app.state.context_assistant_installed is True
     assert app.state.capability_routes_installed is True
     assert app.state.investigation_routes_installed is True
     assert app.state.admin_routes_installed is True
     assert app.state.admin_deep_routes_installed is True
+    assert app.state.ioc_routes_installed is True
 
 
 def test_console_copy_removes_old_taglines():
