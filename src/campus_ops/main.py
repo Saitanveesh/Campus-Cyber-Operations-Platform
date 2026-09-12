@@ -6,6 +6,7 @@ import webbrowser
 
 import uvicorn
 
+from campus_ops.advanced_layer import install_advanced_layer
 from campus_ops.api import create_app
 from campus_ops.config import DEFAULT_SETTINGS
 from campus_ops.runtime_ui import install_runtime_extensions
@@ -18,7 +19,8 @@ def _open_console() -> None:
 
 
 def build_app():
-    return install_runtime_extensions(create_app())
+    app = install_runtime_extensions(create_app())
+    return install_advanced_layer(app)
 
 
 def main() -> None:
