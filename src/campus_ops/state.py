@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 from collections import deque
 from datetime import UTC, datetime
 from threading import RLock
@@ -89,9 +90,29 @@ class LiveState:
             "payload": dict(event.payload),
         }
 
+    @staticmethod
+    def _valid_security_event(event: Event) -> bool:
+        if event.kind != EventKind.ALERT:
+            return True
+        if event.evidence_class != "ARP_OWNERSHIP_CHANGE":
+            return True
+        evidence = event.payload.get("evidence")
+        if not isinstance(evidence, dict):
+            return False
+        raw = str(evidence.get("source") or evidence.get("src") or "").strip()
+        try:
+            ip = ipaddress.ip_address(raw)
+        except ValueError:
+            return False
+        if ip.version != 4 or ip.is_unspecified or ip.is_loopback or ip.is_multicast:
+            return False
+        return raw != "255.255.255.255"
+
     def ingest_event(self, event: Event) -> bool:
         with self._lock:
             if self.session_id is None or event.session_id != self.session_id:
+                return False
+            if not self._valid_security_event(event):
                 return False
             item = self._event_item(event)
             if event.payload.get("type") == "PACKET":
