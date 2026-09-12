@@ -36,7 +36,9 @@ def test_capability_status_scores_ready_core_capabilities():
 
     result = capability_status({"tools": tools, "workers": workers})
 
-    assert result["score"] >= 70
+    assert result["score"] == 100
+    assert result["operational_readiness"] == 100
+    assert result["coverage_score"] < 100
     assert result["core_ready"] == result["core_total"]
     rows = {row["key"]: row for row in result["capabilities"]}
     assert rows["live_packet_visibility"]["state"] == "READY"
@@ -59,3 +61,4 @@ def test_capability_status_reports_missing_packet_tooling():
     assert packet["state"] == "MISSING"
     assert "npcap" in packet["missing_tools"]
     assert "tshark" in packet["missing_tools"]
+    assert result["operational_readiness"] < 100
