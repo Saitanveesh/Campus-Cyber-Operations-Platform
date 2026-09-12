@@ -63,6 +63,17 @@ def _risk_node(metrics: dict[str, Any], target: str) -> dict[str, Any] | None:
     return None
 
 
+def _management_ip(snapshot: dict[str, Any]) -> str | None:
+    network = snapshot.get("network") if isinstance(snapshot.get("network"), dict) else {}
+    raw = network.get("ipv4")
+    values = raw if isinstance(raw, list) else [raw] if raw else []
+    for value in values:
+        candidate = str(value or "").strip()
+        if candidate and candidate != "127.0.0.1":
+            return candidate
+    return None
+
+
 def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]:
     ip = _valid_target(target)
     target = str(ip)
@@ -78,7 +89,10 @@ def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]
         if isinstance(item, dict)
         and (str(item.get("src") or "") == target or str(item.get("dst") or "") == target)
     ]
-    flows.sort(key=lambda item: (_number(item.get("bps_ewma")), _number(item.get("packets"))), reverse=True)
+    flows.sort(
+        key=lambda item: (_number(item.get("bps_ewma")), _number(item.get("packets"))),
+        reverse=True,
+    )
 
     edges = [
         item
@@ -86,7 +100,10 @@ def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]
         if isinstance(item, dict)
         and (str(item.get("source") or "") == target or str(item.get("target") or "") == target)
     ]
-    edges.sort(key=lambda item: (_number(item.get("bps_ewma")), _number(item.get("packets"))), reverse=True)
+    edges.sort(
+        key=lambda item: (_number(item.get("bps_ewma")), _number(item.get("packets"))),
+        reverse=True,
+    )
 
     alerts = [
         item
@@ -122,6 +139,15 @@ def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]
     agents = [item for item in snapshot.get("managed_agents", []) if isinstance(item, dict)]
     agent = _agent_for_ip(agents, target)
     risk = _risk_node(metrics, target)
+
+    remote_endpoint = next(
+        (
+            item
+            for item in snapshot.get("enrolled_endpoints", [])
+            if isinstance(item, dict) and str(item.get("host") or "") == target
+        ),
+        None,
+    )
 
     services: dict[str, int] = {}
     applications: dict[str, int] = {}
@@ -185,6 +211,12 @@ def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]
         "asset": asset,
         "managed_agent": agent,
         "manageable": bool(agent),
+        "remote_endpoint": remote_endpoint,
+        "remote_access": {
+            "enrolled": bool(remote_endpoint),
+            "ssh": bool((remote_endpoint or {}).get("allow_ssh")),
+            "rdp": bool((remote_endpoint or {}).get("allow_rdp")),
+        },
         "flows": flows[:100],
         "topology_edges": edges[:100],
         "alerts": alerts[:100],
@@ -210,6 +242,12 @@ def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]
             "top_applications": sorted(applications.items(), key=lambda item: item[1], reverse=True)[:12],
         },
         "forensic_tools": {
+            "powershell": tool_map.get("powershell", False) or tool_map.get("pwsh", False),
+            "netstat": tool_map.get("netstat", False),
+            "arp": tool_map.get("arp", False),
+            "nslookup": tool_map.get("nslookup", False),
+            "ping": tool_map.get("ping", False),
+            "tracert": tool_map.get("tracert", False),
             "nmap": tool_map.get("nmap", False),
             "tshark": tool_map.get("tshark", False),
             "dumpcap": tool_map.get("dumpcap", False),
@@ -252,22 +290,51 @@ def deep_probe(target: str, include_services: bool) -> dict[str, object]:
 
     powershell = resolve_executable("powershell") or resolve_executable("pwsh")
     if powershell:
-        neighbor_script = (
-            "$ErrorActionPreference='SilentlyContinue'; "
-            f"Get-NetNeighbor -IPAddress '{target}' | "
-            "Select-Object IPAddress,LinkLayerAddress,State,InterfaceAlias | Format-List"
-        )
-        results["neighbor"] = _run_command(
-            [powershell, "-NoProfile", "-NonInteractive", "-Command", neighbor_script], 8
-        )
-        dns_script = (
-            "$ErrorActionPreference='SilentlyContinue'; "
-            f"Resolve-DnsName -Name '{target}' -Type PTR | "
-            "Select-Object NameHost,Name,Type | Format-List"
-        )
-        results["reverse_dns"] = _run_command(
-            [powershell, "-NoProfile", "-NonInteractive", "-Command", dns_script], 8
-        )
+        scripts = {
+            "neighbor": (
+                f"Get-NetNeighbor -IPAddress '{target}' -ErrorAction SilentlyContinue | "
+                "Select-Object IPAddress,LinkLayerAddress,State,InterfaceAlias | Format-List"
+            ),
+            "reverse_dns": (
+                f"Resolve-DnsName -Name '{target}' -Type PTR -ErrorAction SilentlyContinue | "
+                "Select-Object NameHost,Name,Type | Format-List"
+            ),
+            "local_connections": (
+                f"Get-NetTCPConnection -RemoteAddress '{target}' -ErrorAction SilentlyContinue | "
+                "Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State,OwningProcess | "
+                "Sort-Object State,RemotePort | Format-Table -AutoSize"
+            ),
+            "route_selection": (
+                f"Find-NetRoute -RemoteIPAddress '{target}' -ErrorAction SilentlyContinue | "
+                "Select-Object IPAddress,InterfaceAlias,NextHop,RouteMetric | Format-List"
+            ),
+            "firewall_filters": (
+                "$rules=Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction SilentlyContinue; "
+                "foreach($r in $rules){$f=$r|Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue; "
+                f"if($f.RemoteAddress -contains '{target}'){{[PSCustomObject]@{{DisplayName=$r.DisplayName;Enabled=$r.Enabled;Direction=$r.Direction;Action=$r.Action;RemoteAddress=($f.RemoteAddress -join ',')}}}}}} | "
+                "Format-Table -AutoSize"
+            ),
+        }
+        for name, script in scripts.items():
+            results[name] = _run_command(
+                [powershell, "-NoProfile", "-NonInteractive", "-Command", f"$ErrorActionPreference='SilentlyContinue'; {script}"],
+                10,
+            )
+
+    nslookup = resolve_executable("nslookup")
+    if nslookup:
+        results["nslookup"] = _run_command([nslookup, target], 8)
+
+    arp = resolve_executable("arp")
+    if arp:
+        results["arp_cache"] = _run_command([arp, "-a"], 8)
+
+    netstat = resolve_executable("netstat")
+    if netstat:
+        results["netstat"] = _run_command([netstat, "-ano"], 10)
+        output = str(results["netstat"].get("output") or "")
+        lines = [line for line in output.splitlines() if target in line]
+        results["netstat"]["output"] = "\n".join(lines[:200]) or f"No local netstat rows currently reference {target}."
 
     ping = resolve_executable("ping")
     if ping:
@@ -302,7 +369,7 @@ def deep_probe(target: str, include_services: bool) -> dict[str, object]:
             results["service_probe"] = {
                 "status": "UNAVAILABLE",
                 "exit_code": None,
-                "output": "Nmap is not installed or not discoverable.",
+                "output": "Nmap is not installed or not discoverable. Native Windows checks above still run.",
             }
 
     return {
@@ -363,11 +430,19 @@ def install_investigation_routes(app: FastAPI) -> FastAPI:
     @app.post("/api/v1/investigate/{target}/isolate")
     async def investigate_isolate(target: str) -> dict[str, object]:
         orchestrator = app.state.orchestrator
+        snapshot = orchestrator.snapshot()
+        management_ip = _management_ip(snapshot)
+        if not management_ip:
+            raise HTTPException(
+                status_code=409,
+                detail="management interface address is unavailable; isolation refused",
+            )
         try:
             endpoint_id, investigation = _target_agent(orchestrator, target)
             job = await orchestrator.response.queue(
                 endpoint_id=endpoint_id,
                 action="ISOLATE_HOST",
+                arguments={"management_ip": management_ip},
                 role=Role.LAB_ADMINISTRATOR,
                 operator="investigation-center",
             )
@@ -375,7 +450,11 @@ def install_investigation_routes(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except LookupError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"job": job, "target": investigation["target"]}
+        return {
+            "job": job,
+            "target": investigation["target"],
+            "management_ip": management_ip,
+        }
 
     @app.post("/api/v1/investigate/{target}/restore")
     async def investigate_restore(target: str) -> dict[str, object]:
