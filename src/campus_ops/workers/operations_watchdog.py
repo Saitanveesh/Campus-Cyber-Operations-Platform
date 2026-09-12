@@ -75,6 +75,7 @@ class OperationsWatchdogWorker(BaseWorker):
         session_id = snapshot.get("session_id")
         live = snapshot.get("live") if isinstance(snapshot.get("live"), dict) else {}
         capture = live.get("capture") if isinstance(live.get("capture"), dict) else {}
+        metrics = live.get("metrics") if isinstance(live.get("metrics"), dict) else {}
         workers = snapshot.get("workers") if isinstance(snapshot.get("workers"), dict) else {}
 
         if session_id:
@@ -106,6 +107,31 @@ class OperationsWatchdogWorker(BaseWorker):
                     detail,
                     "Attention. Packet capture may be stalled.",
                 )
+                conditions[key] = value
+
+        windows_security = metrics.get("windows_security") if isinstance(metrics.get("windows_security"), dict) else {}
+        if bool(windows_security.get("available")):
+            defender = windows_security.get("defender") if isinstance(windows_security.get("defender"), dict) else {}
+            if defender.get("realtime_enabled") is False or defender.get("antivirus_enabled") is False:
+                key, value = cls._condition(
+                    "defender-protection-disabled",
+                    Severity.HIGH,
+                    "Windows Defender protection is disabled",
+                    f"antivirus={defender.get('antivirus_enabled')} realtime={defender.get('realtime_enabled')}",
+                    "Attention. Windows Defender protection is disabled on the monitoring host.",
+                )
+                conditions[key] = value
+            firewall = windows_security.get("firewall") if isinstance(windows_security.get("firewall"), dict) else {}
+            disabled_profiles = [name for name, enabled in firewall.items() if enabled is False]
+            if disabled_profiles:
+                key, value = cls._condition(
+                    "firewall-profiles-disabled",
+                    Severity.MEDIUM,
+                    "Windows Firewall profile is disabled",
+                    ", ".join(disabled_profiles),
+                    "One or more Windows Firewall profiles are disabled on the monitoring host.",
+                )
+                value["count"] = len(disabled_profiles)
                 conditions[key] = value
 
         for name, raw in workers.items():
