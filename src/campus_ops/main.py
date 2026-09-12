@@ -11,6 +11,7 @@ import uvicorn
 from campus_ops.advanced_layer import install_advanced_layer
 from campus_ops.api import create_app
 from campus_ops.config import DEFAULT_SETTINGS
+from campus_ops.enterprise_detection import install_enterprise_detection
 from campus_ops.enterprise_forensics import install_enterprise_forensics
 from campus_ops.enterprise_layer import install_enterprise_layer
 from campus_ops.network_depth_layer import install_network_depth_layer
@@ -51,6 +52,7 @@ def build_app():
     app = install_enterprise_layer(app)
     app = install_enterprise_forensics(app)
     app = install_network_depth_layer(app)
+    app = install_enterprise_detection(app)
 
     if startup_handlers or shutdown_handlers:
         original_lifespan = app.router.lifespan_context
