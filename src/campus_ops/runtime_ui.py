@@ -5,6 +5,8 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
+from campus_ops.capabilities import install_capability_routes
+from campus_ops.capability_ui import CAPABILITY_EXTENSION
 from campus_ops.context_assistant import install_context_assistant, page_briefing
 from campus_ops.context_ui import CONTEXT_EXTENSION
 from campus_ops.topology_ui import TOPOLOGY_EXTENSION
@@ -117,11 +119,12 @@ def _clean_console_copy(html: str) -> str:
 
 
 def install_runtime_extensions(app: FastAPI) -> FastAPI:
-    """Install watchdog, assistant, topology and live traffic runtime extensions."""
+    """Install watchdog, assistant, capability, topology and traffic runtime extensions."""
     if getattr(app.state, "runtime_extensions_installed", False):
         return app
     app.state.runtime_extensions_installed = True
     install_context_assistant(app)
+    install_capability_routes(app)
 
     @app.get("/api/v1/system/watchdog")
     async def watchdog_status() -> dict[str, object]:
@@ -156,7 +159,7 @@ def install_runtime_extensions(app: FastAPI) -> FastAPI:
             html = _clean_console_copy(html)
             extended = html.replace(
                 "</body>",
-                f"{UI_EXTENSION}\n{CONTEXT_EXTENSION}\n{TOPOLOGY_EXTENSION}\n{TRAFFIC_EXTENSION}\n</body>",
+                f"{UI_EXTENSION}\n{CONTEXT_EXTENSION}\n{CAPABILITY_EXTENSION}\n{TOPOLOGY_EXTENSION}\n{TRAFFIC_EXTENSION}\n</body>",
             )
             return HTMLResponse(
                 extended,
