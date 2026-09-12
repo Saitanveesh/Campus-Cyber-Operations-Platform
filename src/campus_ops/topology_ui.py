@@ -1,6 +1,3 @@
-from __future__ import annotations
-
-
 TOPOLOGY_EXTENSION = r"""
 <style>
 #topologyCanvas{background:#fff;min-height:560px}
