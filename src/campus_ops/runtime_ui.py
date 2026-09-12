@@ -6,6 +6,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
 from campus_ops.admin import install_admin_routes
+from campus_ops.admin_deep import install_admin_deep_routes
+from campus_ops.admin_deep_ui import ADMIN_DEEP_EXTENSION
 from campus_ops.admin_ui import ADMIN_EXTENSION
 from campus_ops.capabilities import install_capability_routes
 from campus_ops.capability_ui import CAPABILITY_EXTENSION
@@ -80,6 +82,7 @@ def install_runtime_extensions(app: FastAPI) -> FastAPI:
     install_capability_routes(app)
     install_investigation_routes(app)
     install_admin_routes(app)
+    install_admin_deep_routes(app)
 
     @app.get("/api/v1/system/watchdog")
     async def watchdog_status() -> dict[str, object]:
@@ -113,7 +116,7 @@ def install_runtime_extensions(app: FastAPI) -> FastAPI:
             html = _clean_console_copy(html)
             extended = html.replace(
                 "</body>",
-                f"{UI_EXTENSION}\n{CONTEXT_EXTENSION}\n{CAPABILITY_EXTENSION}\n{INVESTIGATION_EXTENSION}\n{TOPOLOGY_EXTENSION}\n{TRAFFIC_EXTENSION}\n{ADMIN_EXTENSION}\n</body>",
+                f"{UI_EXTENSION}\n{CONTEXT_EXTENSION}\n{CAPABILITY_EXTENSION}\n{INVESTIGATION_EXTENSION}\n{TOPOLOGY_EXTENSION}\n{TRAFFIC_EXTENSION}\n{ADMIN_EXTENSION}\n{ADMIN_DEEP_EXTENSION}\n</body>",
             )
             return HTMLResponse(extended, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
         return await call_next(request)
