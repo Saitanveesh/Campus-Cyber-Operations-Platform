@@ -1,5 +1,5 @@
-from campus_ops.main import build_app
 from campus_ops.enterprise_operations import SoarExecuteRequest, soar_plan
+from campus_ops.main import build_app
 
 
 def test_enterprise_operations_routes_installed(tmp_path, monkeypatch):
