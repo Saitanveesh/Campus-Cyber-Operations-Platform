@@ -210,7 +210,7 @@ def _tool_map(tools: object) -> dict[str, dict[str, Any]]:
 def _worker_ready(worker: object) -> bool:
     if not isinstance(worker, dict):
         return False
-    return str(worker.get("state") or "").upper() in {"HEALTHY", "STARTING"}
+    return str(worker.get("state") or "").upper() in {"HEALTHY", "RUNNING", "STARTING"}
 
 
 def capability_status(snapshot: dict[str, Any]) -> dict[str, object]:
@@ -253,27 +253,33 @@ def capability_status(snapshot: dict[str, Any]) -> dict[str, object]:
         )
 
     core = [row for row in rows if row["priority"] == "CORE"]
+    optional = [row for row in rows if row["priority"] != "CORE"]
     core_ready = sum(1 for row in core if row["state"] == "READY")
-    recommended_ready = sum(1 for row in rows if row["state"] == "READY")
-    score = round(
-        (core_ready / len(core) * 70 if core else 70)
-        + (recommended_ready / len(rows) * 30 if rows else 30)
-    )
-    gaps = [row for row in rows if row["state"] != "READY"]
-    gaps.sort(
-        key=lambda row: (
-            row["priority"] != "CORE",
-            row["state"] != "MISSING",
-            str(row["label"]),
-        )
-    )
+    optional_ready = sum(1 for row in optional if row["state"] == "READY")
+    ready = sum(1 for row in rows if row["state"] == "READY")
+
+    operational_readiness = round(core_ready / len(core) * 100) if core else 100
+    coverage_score = round(ready / len(rows) * 100) if rows else 100
+
+    core_gaps = [row for row in core if row["state"] != "READY"]
+    optional_gaps = [row for row in optional if row["state"] != "READY"]
+    core_gaps.sort(key=lambda row: (row["state"] != "MISSING", str(row["label"])))
+    optional_gaps.sort(key=lambda row: (row["state"] != "MISSING", str(row["label"])))
+    gaps = [*core_gaps, *optional_gaps]
+
     return {
-        "score": min(100, score),
+        "score": min(100, operational_readiness),
+        "operational_readiness": min(100, operational_readiness),
+        "coverage_score": min(100, coverage_score),
         "core_ready": core_ready,
         "core_total": len(core),
-        "ready": recommended_ready,
+        "optional_ready": optional_ready,
+        "optional_total": len(optional),
+        "ready": ready,
         "total": len(rows),
         "capabilities": rows,
+        "core_gaps": core_gaps,
+        "optional_gaps": optional_gaps,
         "next_gaps": gaps[:6],
         "diagnostics": [
             {"key": key, "tool": value[0], "description": value[2]}
