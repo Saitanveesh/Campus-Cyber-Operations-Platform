@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 
 from campus_ops.capabilities import capability_status
 
@@ -290,7 +290,10 @@ def install_context_assistant(app: FastAPI) -> FastAPI:
         return {"stopped": True, "voice": orchestrator.voice.status()}
 
     @app.post("/api/v1/system/assistant/context/{view}")
-    async def context_brief(view: str) -> dict[str, object]:
+    async def context_brief(
+        view: str,
+        speak: bool = Query(default=True),
+    ) -> dict[str, object]:
         if view not in PAGES:
             raise HTTPException(status_code=404, detail="Unknown console view")
         orchestrator = app.state.orchestrator
@@ -299,14 +302,22 @@ def install_context_assistant(app: FastAPI) -> FastAPI:
         voice_status = orchestrator.voice.status()
         muted = bool(voice_status.get("muted"))
         backend_ready = bool(voice_status.get("available")) and not muted
-        queued = await orchestrator.voice.replace_speech(text, priority=18) if backend_ready else False
-        if not backend_ready:
+
+        if not speak:
             await orchestrator.voice.cancel_speech(clear_queue=True)
+            queued = False
+        elif backend_ready:
+            queued = await orchestrator.voice.replace_speech(text, priority=18)
+        else:
+            await orchestrator.voice.cancel_speech(clear_queue=True)
+            queued = False
+
         return {
             "view": view,
             "text": text,
             "queued": bool(queued),
             "muted": muted,
+            "speak": speak,
             "voice": orchestrator.voice.status(),
         }
 
