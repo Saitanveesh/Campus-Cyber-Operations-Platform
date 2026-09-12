@@ -356,7 +356,7 @@ class Orchestrator:
                 payload={
                     "state": "STARTED",
                     "message": "Live Operations Console started",
-                    "voice": "Welcome back, Sai Tanveesh. Live Operations Console is starting.",
+                    "voice": "Welcome back.",
                 },
             )
         )
