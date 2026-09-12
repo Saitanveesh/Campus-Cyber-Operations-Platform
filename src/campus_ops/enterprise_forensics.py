@@ -12,7 +12,6 @@ from fastapi import FastAPI, Header, Query, Request
 
 from campus_ops.admin_deep import _require_admin
 
-
 _FIELD_RE = re.compile(r"^([^:\r\n]+):\s?(.*)$")
 
 
