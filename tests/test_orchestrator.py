@@ -31,6 +31,7 @@ def test_snapshot_has_full_worker_fabric_before_start(tmp_path, monkeypatch):
         "beaconing-watch",
         "dos-early-warning",
         "threat-engine",
+        "ioc-watch",
         "traffic-baseline",
         "performance-engine",
         "incident-correlation",
@@ -58,5 +59,6 @@ def test_snapshot_has_full_worker_fabric_before_start(tmp_path, monkeypatch):
     }
     assert workers == expected
     assert snapshot["managed_agents"] == []
+    assert snapshot["ioc_watchlist"] == []
     assert snapshot["response_jobs"] == []
     assert snapshot["watchdog"]["state"] == "STOPPED"
