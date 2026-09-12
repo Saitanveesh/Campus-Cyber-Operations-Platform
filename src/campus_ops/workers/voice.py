@@ -105,7 +105,7 @@ class VoiceAlertWorker(BaseWorker):
             stderr.decode(errors="replace"),
         )
 
-    async def _synthesize(self, text: str) -> tuple[bool, str | None]:
+    async def _synthesize(self, text: str, generation: int) -> tuple[bool, str | None, bool]:
         safe = text.replace("'", "''")[:400]
         system_speech = (
             "$ErrorActionPreference='Stop'; "
@@ -119,9 +119,11 @@ class VoiceAlertWorker(BaseWorker):
         except (OSError, asyncio.SubprocessError) as exc:
             code = -1
             stderr = str(exc)
+        if generation != self._generation:
+            return False, None, True
         if code == 0:
             self._engine = "System.Speech"
-            return True, None
+            return True, None, False
         first_error = stderr.strip()[-300:] or f"System.Speech exited {code}"
 
         sapi = (
@@ -133,12 +135,16 @@ class VoiceAlertWorker(BaseWorker):
         try:
             code, _stdout, stderr = await self._powershell(sapi)
         except (OSError, asyncio.SubprocessError) as exc:
-            return False, f"{first_error}; SAPI fallback failed: {exc}"
+            if generation != self._generation:
+                return False, None, True
+            return False, f"{first_error}; SAPI fallback failed: {exc}", False
+        if generation != self._generation:
+            return False, None, True
         if code == 0:
             self._engine = "SAPI.SpVoice"
-            return True, None
+            return True, None, False
         fallback_error = stderr.strip()[-300:] or f"SAPI exited {code}"
-        return False, f"{first_error}; {fallback_error}"
+        return False, f"{first_error}; {fallback_error}", False
 
     async def cancel_speech(self, clear_queue: bool = True) -> None:
         self._generation += 1
@@ -162,8 +168,15 @@ class VoiceAlertWorker(BaseWorker):
                     self._queue.task_done()
         self._speaking = False
 
-    async def speak(self, text: str, critical: bool = False, force: bool = False) -> bool:
+    async def speak(
+        self,
+        text: str,
+        critical: bool = False,
+        force: bool = False,
+        generation: int | None = None,
+    ) -> bool:
         text = self._clean_text(text)
+        generation = self._generation if generation is None else generation
         if os.name != "nt":
             self._backend_ready = False
             self._last_speech_error = "backend voice synthesis is available only on Windows"
@@ -174,8 +187,12 @@ class VoiceAlertWorker(BaseWorker):
             return False
         if not self._backend_ready and not force:
             return False
+        if generation != self._generation:
+            return False
 
         async with self._speech_lock:
+            if generation != self._generation:
+                return False
             self._speaking = True
             try:
                 if critical:
@@ -186,10 +203,12 @@ class VoiceAlertWorker(BaseWorker):
                         await asyncio.to_thread(winsound.Beep, 900, 220)
                     except RuntimeError:
                         pass
-                success, error = await self._synthesize(text)
+                success, error, cancelled = await self._synthesize(text, generation)
             finally:
                 self._speaking = False
 
+        if cancelled or generation != self._generation:
+            return False
         if not success:
             self._backend_ready = False
             self._last_speech_error = error or "voice synthesis failed"
@@ -300,7 +319,12 @@ class VoiceAlertWorker(BaseWorker):
             try:
                 if generation != self._generation:
                     continue
-                await self.speak(text, critical=critical, force=force)
+                await self.speak(
+                    text,
+                    critical=critical,
+                    force=force,
+                    generation=generation,
+                )
             finally:
                 self._queue.task_done()
 
