@@ -57,16 +57,19 @@ def score_candidate(candidate: NetworkCandidate) -> tuple[int, tuple[str, ...]]:
         score -= 35
         reasons.append("no-unicast-address")
     if candidate.default_route:
-        score += 45
+        score += 60
         reasons.append("default-route")
+    else:
+        score -= 20
+        reasons.append("no-default-route")
     if candidate.gateway:
-        score += 5
+        score += 8
         reasons.append("gateway")
     if candidate.prefixes:
         score += 3
         reasons.append("prefix-known")
     if candidate.route_metric is not None:
-        score += max(0, 20 - min(candidate.route_metric, 20))
+        score += max(0, 25 - min(candidate.route_metric, 25))
         reasons.append(f"metric:{candidate.route_metric}")
     if candidate.category == "ethernet":
         score += 12
@@ -75,7 +78,7 @@ def score_candidate(candidate: NetworkCandidate) -> tuple[int, tuple[str, ...]]:
         score += 8
         reasons.append("wireless")
     elif candidate.category == "virtual":
-        score -= 30
+        score -= 55
         reasons.append("virtual-penalty")
     if candidate.bytes_recv > 0 or candidate.bytes_sent > 0:
         score += 5
@@ -187,7 +190,21 @@ def elect_network(candidates: list[NetworkCandidate]) -> SelectedNetwork | None:
     viable = [(result, candidate) for result, candidate in scored if result[0] >= 40]
     if not viable:
         return None
-    (score, reasons), selected = max(viable, key=lambda item: (item[0][0], item[1].name))
+
+    routed = [(result, candidate) for result, candidate in viable if candidate.default_route]
+    pool = routed or viable
+    physical = [(result, candidate) for result, candidate in pool if candidate.category != "virtual"]
+    if physical:
+        pool = physical
+
+    (score, reasons), selected = max(
+        pool,
+        key=lambda item: (
+            item[0][0],
+            -(item[1].route_metric if item[1].route_metric is not None else 9999),
+            item[1].name,
+        ),
+    )
     return SelectedNetwork(
         interface=selected.name,
         score=score,
