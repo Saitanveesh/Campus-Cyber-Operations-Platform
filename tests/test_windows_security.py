@@ -34,3 +34,28 @@ def test_windows_security_accepts_single_firewall_object():
         {"firewall": {"Name": "Private", "Enabled": "True"}, "sysmon": []}
     )
     assert result["firewall"] == {"Private": True}
+
+
+def test_windows_security_uses_raw_firewall_value_when_json_value_is_unknown():
+    result = WindowsSecurityTelemetryWorker.normalize(
+        {
+            "firewall": [
+                {"Name": "Domain", "Enabled": None, "EnabledRaw": "True"},
+                {"Name": "Private", "Enabled": None, "EnabledRaw": "False"},
+            ]
+        }
+    )
+    assert result["firewall"] == {"Domain": True, "Private": False}
+
+
+def test_windows_security_converts_legacy_powershell_date():
+    result = WindowsSecurityTelemetryWorker.normalize(
+        {
+            "defender": {
+                "AntivirusSignatureLastUpdated": "/Date(1789150340000)/",
+            }
+        }
+    )
+    timestamp = result["defender"]["signature_updated"]
+    assert isinstance(timestamp, str)
+    assert timestamp.startswith("2026-")
