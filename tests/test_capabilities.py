@@ -22,6 +22,10 @@ def test_capability_status_scores_ready_core_capabilities():
         "malware-analysis": healthy,
         "local-host-telemetry": healthy,
         "endpoint-identity": healthy,
+        "endpoint-deep-monitor": healthy,
+        "lateral-movement-watch": healthy,
+        "beaconing-watch": healthy,
+        "ioc-watch": healthy,
         "windows-security-telemetry": healthy,
         "syslog-receiver": healthy,
         "flow-telemetry-receiver": healthy,
@@ -42,6 +46,10 @@ def test_capability_status_scores_ready_core_capabilities():
     assert result["core_ready"] == result["core_total"]
     rows = {row["key"]: row for row in result["capabilities"]}
     assert rows["live_packet_visibility"]["state"] == "READY"
+    assert rows["endpoint_deep_analytics"]["state"] == "READY"
+    assert rows["lateral_movement_analytics"]["state"] == "READY"
+    assert rows["periodic_connection_analytics"]["state"] == "READY"
+    assert rows["threat_watchlist"]["state"] == "READY"
     assert rows["windows_security_posture"]["state"] == "READY"
     assert rows["network_ids"]["state"] in {"PARTIAL", "MISSING"}
 
