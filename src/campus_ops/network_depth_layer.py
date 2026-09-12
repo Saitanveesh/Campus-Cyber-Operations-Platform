@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
-from collections import Counter, defaultdict
+from collections import Counter
 from typing import Any
 
 from fastapi import FastAPI, Header, Request
@@ -165,21 +165,21 @@ def build_segmentation_report(app: FastAPI) -> dict[str, Any]:
         src_zone = classify(src)
         dst_zone = classify(dst)
         counts[f"{src_zone} -> {dst_zone}"] += 1
-        if src_zone not in {dst_zone, "UNKNOWN", "SPECIAL"} and dst_zone not in {
-            "UNKNOWN",
-            "SPECIAL",
-        }:
-            if len(cross_prefix) < 100:
-                cross_prefix.append(
-                    {
-                        "src": src,
-                        "dst": dst,
-                        "src_zone": src_zone,
-                        "dst_zone": dst_zone,
-                        "protocol": flow.get("protocol") or flow.get("proto"),
-                        "service": flow.get("service") or flow.get("application"),
-                    }
-                )
+        if (
+            src_zone not in {dst_zone, "UNKNOWN", "SPECIAL"}
+            and dst_zone not in {"UNKNOWN", "SPECIAL"}
+            and len(cross_prefix) < 100
+        ):
+            cross_prefix.append(
+                {
+                    "src": src,
+                    "dst": dst,
+                    "src_zone": src_zone,
+                    "dst_zone": dst_zone,
+                    "protocol": flow.get("protocol") or flow.get("proto"),
+                    "service": flow.get("service") or flow.get("application"),
+                }
+            )
 
     return {
         "configured_prefixes": [str(net) for net in prefixes],
