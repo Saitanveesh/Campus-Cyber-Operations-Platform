@@ -11,6 +11,7 @@ import uvicorn
 from campus_ops.advanced_layer import install_advanced_layer
 from campus_ops.api import create_app
 from campus_ops.config import DEFAULT_SETTINGS
+from campus_ops.depth_engines import install_depth_engines
 from campus_ops.enterprise_cases import install_enterprise_cases
 from campus_ops.enterprise_detection import install_enterprise_detection
 from campus_ops.enterprise_forensics import install_enterprise_forensics
@@ -39,27 +40,20 @@ async def _run_handler(handler) -> None:
 
 def build_app():
     app = install_runtime_extensions(create_app())
-
     startup_handlers = []
     shutdown_handlers = []
-
     if not hasattr(app, "add_event_handler"):
-
         def add_event_handler(event_type: str, handler) -> None:
-            if event_type == "startup":
-                startup_handlers.append(handler)
-            elif event_type == "shutdown":
-                shutdown_handlers.append(handler)
-            else:
-                raise ValueError(f"unsupported lifecycle event: {event_type}")
-
+            if event_type == "startup": startup_handlers.append(handler)
+            elif event_type == "shutdown": shutdown_handlers.append(handler)
+            else: raise ValueError(f"unsupported lifecycle event: {event_type}")
         app.add_event_handler = add_event_handler  # type: ignore[attr-defined]
-
     app = install_advanced_layer(app)
     app = install_enterprise_layer(app)
     app = install_enterprise_forensics(app)
     app = install_network_depth_layer(app)
     app = install_enterprise_detection(app)
+    app = install_depth_engines(app)
     app = install_enterprise_operations(app)
     app = install_enterprise_cases(app)
     app = install_enterprise_soc(app)
@@ -67,34 +61,22 @@ def build_app():
     app = install_enterprise_telemetry(app)
     app = install_link_state(app)
     app = install_red_panel(app)
-
     if startup_handlers or shutdown_handlers:
         original_lifespan = app.router.lifespan_context
-
         @asynccontextmanager
         async def combined_lifespan(app_instance):
             async with original_lifespan(app_instance):
-                for handler in startup_handlers:
-                    await _run_handler(handler)
-                try:
-                    yield
+                for handler in startup_handlers: await _run_handler(handler)
+                try: yield
                 finally:
-                    for handler in reversed(shutdown_handlers):
-                        await _run_handler(handler)
-
+                    for handler in reversed(shutdown_handlers): await _run_handler(handler)
         app.router.lifespan_context = combined_lifespan
-
     return app
 
 
 def main() -> None:
     threading.Timer(1.2, _open_console).start()
-    uvicorn.run(
-        build_app(),
-        host=DEFAULT_SETTINGS.host,
-        port=DEFAULT_SETTINGS.port,
-        log_level="warning",
-    )
+    uvicorn.run(build_app(), host=DEFAULT_SETTINGS.host, port=DEFAULT_SETTINGS.port, log_level="warning")
 
 
 if __name__ == "__main__":
