@@ -21,6 +21,29 @@ TOOL_SPECS: tuple[tuple[str, str, str, tuple[str, ...], bool], ...] = (
     ("tshark", "TShark", "deep protocol decoding", ("tshark.exe", "tshark"), False),
     ("suricata", "Suricata", "IDS/signature telemetry", ("suricata.exe", "suricata"), False),
     ("yara", "YARA", "file-content rule matching", ("yara64.exe", "yara.exe", "yara64", "yara"), False),
+    ("pktmon", "Pktmon", "Windows-native packet diagnostics", ("pktmon.exe", "pktmon"), False),
+    (
+        "powershell",
+        "Windows PowerShell",
+        "Windows telemetry and response automation",
+        ("powershell.exe", "powershell"),
+        False,
+    ),
+    ("pwsh", "PowerShell", "modern PowerShell automation", ("pwsh.exe", "pwsh"), False),
+    ("wevtutil", "wevtutil", "Windows event-log access", ("wevtutil.exe", "wevtutil"), False),
+    ("netsh", "netsh", "Windows network diagnostics", ("netsh.exe", "netsh"), False),
+    ("netstat", "netstat", "connection inventory fallback", ("netstat.exe", "netstat"), False),
+    ("arp", "arp", "ARP cache diagnostics", ("arp.exe", "arp"), False),
+    ("nslookup", "nslookup", "DNS diagnostics", ("nslookup.exe", "nslookup"), False),
+    ("nmap", "Nmap", "operator-initiated authorized discovery", ("nmap.exe", "nmap"), False),
+    ("osquery", "osquery", "endpoint SQL telemetry", ("osqueryi.exe", "osqueryi"), False),
+    ("sysmon", "Sysmon", "high-detail Windows security telemetry", ("Sysmon64.exe", "Sysmon.exe", "sysmon64", "sysmon"), False),
+    ("sigcheck", "Sigcheck", "binary signature and trust inspection", ("sigcheck64.exe", "sigcheck.exe", "sigcheck64", "sigcheck"), False),
+    ("autoruns", "Autoruns CLI", "persistence and autostart inspection", ("autorunsc64.exe", "autorunsc.exe", "autorunsc64", "autorunsc"), False),
+    ("handle", "Handle", "process and file-handle investigation", ("handle64.exe", "handle.exe", "handle64", "handle"), False),
+    ("clamscan", "ClamAV", "optional second-opinion malware scanning", ("clamscan.exe", "clamscan"), False),
+    ("hayabusa", "Hayabusa", "Windows event-log threat hunting", ("hayabusa.exe", "hayabusa"), False),
+    ("chainsaw", "Chainsaw", "Windows event-log forensic hunting", ("chainsaw.exe", "chainsaw"), False),
 )
 
 
@@ -29,6 +52,7 @@ def _program_roots() -> tuple[Path, ...]:
         os.environ.get("ProgramFiles"),
         os.environ.get("ProgramFiles(x86)"),
         os.environ.get("LOCALAPPDATA"),
+        os.environ.get("ProgramData"),
     ]
     roots: list[Path] = []
     for value in values:
@@ -43,34 +67,34 @@ def _default_candidates(key: str) -> tuple[Path, ...]:
     candidates: list[Path] = []
     for root in _program_roots():
         if key == "tshark":
-            candidates.extend(
-                [
-                    root / "Wireshark" / "tshark.exe",
-                    root / "Programs" / "Wireshark" / "tshark.exe",
-                ]
-            )
+            candidates.extend([root / "Wireshark" / "tshark.exe", root / "Programs" / "Wireshark" / "tshark.exe"])
         elif key == "dumpcap":
-            candidates.extend(
-                [
-                    root / "Wireshark" / "dumpcap.exe",
-                    root / "Programs" / "Wireshark" / "dumpcap.exe",
-                ]
-            )
+            candidates.extend([root / "Wireshark" / "dumpcap.exe", root / "Programs" / "Wireshark" / "dumpcap.exe"])
         elif key == "suricata":
-            candidates.extend(
-                [
-                    root / "Suricata" / "suricata.exe",
-                    root / "Programs" / "Suricata" / "suricata.exe",
-                ]
-            )
+            candidates.extend([root / "Suricata" / "suricata.exe", root / "Programs" / "Suricata" / "suricata.exe"])
         elif key == "yara":
-            candidates.extend(
-                [
-                    root / "YARA" / "yara64.exe",
-                    root / "YARA" / "yara.exe",
-                    root / "Programs" / "YARA" / "yara64.exe",
-                ]
-            )
+            candidates.extend([root / "YARA" / "yara64.exe", root / "YARA" / "yara.exe", root / "Programs" / "YARA" / "yara64.exe"])
+        elif key == "pwsh":
+            candidates.extend([root / "PowerShell" / "7" / "pwsh.exe", root / "Programs" / "PowerShell" / "7" / "pwsh.exe"])
+        elif key == "nmap":
+            candidates.extend([root / "Nmap" / "nmap.exe", root / "Programs" / "Nmap" / "nmap.exe"])
+        elif key == "osquery":
+            candidates.extend([root / "osquery" / "osqueryi.exe", root / "Programs" / "osquery" / "osqueryi.exe"])
+        elif key in {"sysmon", "sigcheck", "autoruns", "handle"}:
+            names = {
+                "sysmon": ("Sysmon64.exe", "Sysmon.exe"),
+                "sigcheck": ("sigcheck64.exe", "sigcheck.exe"),
+                "autoruns": ("autorunsc64.exe", "autorunsc.exe"),
+                "handle": ("handle64.exe", "handle.exe"),
+            }[key]
+            for name in names:
+                candidates.extend([root / "Sysinternals" / name, root / "Programs" / "Sysinternals" / name])
+        elif key == "clamscan":
+            candidates.extend([root / "ClamAV" / "clamscan.exe", root / "Programs" / "ClamAV" / "clamscan.exe"])
+        elif key == "hayabusa":
+            candidates.extend([root / "Hayabusa" / "hayabusa.exe", root / "Programs" / "Hayabusa" / "hayabusa.exe"])
+        elif key == "chainsaw":
+            candidates.extend([root / "Chainsaw" / "chainsaw.exe", root / "Programs" / "Chainsaw" / "chainsaw.exe"])
     return tuple(candidates)
 
 
