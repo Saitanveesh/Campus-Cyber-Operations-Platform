@@ -46,6 +46,7 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint.per-file-ignores]
+"src/campus_ops/context_assistant.py" = ["I001"]
 "src/campus_ops/runtime_ui.py" = ["I001"]
 "src/campus_ops/workers/incidents.py" = ["I001"]
 "src/campus_ops/workers/operations_watchdog.py" = ["SIM114"]
