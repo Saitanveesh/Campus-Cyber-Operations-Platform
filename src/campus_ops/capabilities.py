@@ -112,7 +112,7 @@ CAPABILITIES: tuple[CapabilitySpec, ...] = (
         "CONTROL",
         "Policy-gated endpoint actions, scheduled response jobs and remote administration.",
         (("powershell", "pwsh"),),
-        ("response-scheduler",),
+        ("job-scheduler",),
         "CORE",
     ),
     CapabilitySpec(
