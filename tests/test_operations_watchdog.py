@@ -18,6 +18,7 @@ def _snapshot() -> dict[str, object]:
         "tools": [],
         "live": {
             "capture": {"state": "ACTIVE", "detail": "capturing"},
+            "metrics": {},
             "incidents": [],
             "assets": [],
             "flows": [],
@@ -111,3 +112,21 @@ def test_watchdog_briefing_identifies_highest_priority_incident():
     assert "Suspicious fan-out" in text
     assert "10.0.0.22" in text
     assert "17 destinations" in text
+
+
+def test_watchdog_detects_disabled_defender_and_firewall_profile():
+    snapshot = _snapshot()
+    live = snapshot["live"]
+    assert isinstance(live, dict)
+    metrics = live["metrics"]
+    assert isinstance(metrics, dict)
+    metrics["windows_security"] = {
+        "available": True,
+        "defender": {"antivirus_enabled": True, "realtime_enabled": False},
+        "firewall": {"Domain": True, "Private": True, "Public": False},
+    }
+
+    conditions = OperationsWatchdogWorker.evaluate(snapshot)
+    assert "defender-protection-disabled" in conditions
+    assert "firewall-profiles-disabled" in conditions
+    assert conditions["firewall-profiles-disabled"]["count"] == 1
