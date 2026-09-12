@@ -84,8 +84,30 @@ def test_watchdog_builds_human_operational_briefing():
     live["flows"] = [{"src": "10.0.0.2", "dst": "10.0.0.3"}]
 
     text = OperationsWatchdogWorker.briefing(snapshot)
-    assert "Sai Tanveesh" in text
+    assert "Sai Tanveesh" not in text
     assert "Wi-Fi" in text
     assert "2 assets" in text
     assert "1 active flows" in text
     assert "no open incidents" in text
+
+
+def test_watchdog_briefing_identifies_highest_priority_incident():
+    snapshot = _snapshot()
+    live = snapshot["live"]
+    assert isinstance(live, dict)
+    live["incidents"] = [
+        {
+            "status": "OPEN",
+            "severity": "HIGH",
+            "title": "Suspicious fan-out",
+            "source": "10.0.0.22",
+            "confidence": 91,
+            "last_seen": "2026-09-12T03:00:00+00:00",
+            "latest_evidence": {"unique_destinations": 17},
+        }
+    ]
+
+    text = OperationsWatchdogWorker.briefing(snapshot)
+    assert "Suspicious fan-out" in text
+    assert "10.0.0.22" in text
+    assert "17 destinations" in text
