@@ -65,6 +65,14 @@ CAPABILITIES: tuple[CapabilitySpec, ...] = (
         "CORE",
     ),
     CapabilitySpec(
+        "windows_security_posture",
+        "Windows Security Posture",
+        "ENDPOINT",
+        "Live Defender, Firewall and Sysmon posture for the monitoring host.",
+        (("powershell", "pwsh"),),
+        ("windows-security-telemetry",),
+    ),
+    CapabilitySpec(
         "dfir_hunting",
         "DFIR Event Hunting",
         "EVIDENCE",
@@ -165,6 +173,24 @@ DIAGNOSTICS: dict[str, tuple[str, tuple[str, ...], str]] = {
         ),
         "Read Microsoft Defender protection state.",
     ),
+    "defender-detections": (
+        "powershell",
+        (
+            "-NoProfile",
+            "-Command",
+            "Get-MpThreatDetection | Sort-Object InitialDetectionTime -Descending | Select-Object -First 20 ThreatID,ThreatStatusID,InitialDetectionTime,Resources | Format-List",
+        ),
+        "Show recent Microsoft Defender threat detections when available.",
+    ),
+    "sysmon-status": (
+        "powershell",
+        (
+            "-NoProfile",
+            "-Command",
+            "Get-Service -Name Sysmon64,Sysmon -ErrorAction SilentlyContinue | Select-Object Name,Status,StartType | Format-Table -AutoSize",
+        ),
+        "Show Sysmon service state when installed.",
+    ),
     "event-logs": ("wevtutil", ("el",), "List Windows event-log channels."),
     "wifi-link": ("netsh", ("wlan", "show", "interfaces"), "Show current Windows Wi-Fi link telemetry."),
     "pktmon-components": ("pktmon", ("list",), "Show Windows packet-monitor components."),
@@ -229,9 +255,18 @@ def capability_status(snapshot: dict[str, Any]) -> dict[str, object]:
     core = [row for row in rows if row["priority"] == "CORE"]
     core_ready = sum(1 for row in core if row["state"] == "READY")
     recommended_ready = sum(1 for row in rows if row["state"] == "READY")
-    score = round((core_ready / len(core) * 70 if core else 70) + (recommended_ready / len(rows) * 30 if rows else 30))
+    score = round(
+        (core_ready / len(core) * 70 if core else 70)
+        + (recommended_ready / len(rows) * 30 if rows else 30)
+    )
     gaps = [row for row in rows if row["state"] != "READY"]
-    gaps.sort(key=lambda row: (row["priority"] != "CORE", row["state"] != "MISSING", str(row["label"])))
+    gaps.sort(
+        key=lambda row: (
+            row["priority"] != "CORE",
+            row["state"] != "MISSING",
+            str(row["label"]),
+        )
+    )
     return {
         "score": min(100, score),
         "core_ready": core_ready,
