@@ -82,13 +82,18 @@ def _rows(app: FastAPI) -> list[dict[str, Any]]:
     return rows
 
 
+def _payload(row: dict[str, Any]) -> dict[str, Any]:
+    value = row.get("payload")
+    return value if isinstance(value, dict) else {}
+
+
 def soc_overview(app: FastAPI) -> dict[str, Any]:
     rows = _rows(app)
     severity = Counter(str(row.get("severity") or "INFO").upper() for row in rows)
     sources = Counter(str(row.get("source") or "unknown") for row in rows)
     targets: Counter[str] = Counter()
     for row in rows:
-        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        payload = _payload(row)
         for key in ("src_ip", "dst_ip", "ip", "host", "target"):
             value = _valid_ip(str(payload.get(key) or ""))
             if value:
@@ -107,8 +112,11 @@ def target_pivot(app: FastAPI, target: str) -> dict[str, Any]:
     target = target.strip()
     matches: list[dict[str, Any]] = []
     for row in _rows(app):
-        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
-        haystack = " ".join(str(v) for v in [row.get("source"), row.get("title"), row.get("summary"), *payload.values()])
+        payload = _payload(row)
+        haystack = " ".join(
+            str(value)
+            for value in [row.get("source"), row.get("title"), row.get("summary"), *payload.values()]
+        )
         if target.lower() in haystack.lower():
             matches.append(row)
     return {
@@ -117,6 +125,77 @@ def target_pivot(app: FastAPI, target: str) -> dict[str, Any]:
         "matching_signals": len(matches),
         "recent": matches[-100:],
         "truth_note": "Pivot includes only evidence containing the requested target in the current session.",
+    }
+
+
+def infrastructure_inventory(app: FastAPI) -> dict[str, Any]:
+    """Build a read-only inventory from observed SNMP/LLDP/CDP/NAC/syslog evidence."""
+    devices: dict[str, dict[str, Any]] = {}
+    vlans: Counter[str] = Counter()
+    ports: Counter[str] = Counter()
+    links: list[dict[str, Any]] = []
+
+    for row in _rows(app):
+        payload = _payload(row)
+        event_type = str(payload.get("type") or "").upper()
+        source = str(row.get("source") or "")
+        evidence = str(row.get("evidence_class") or "").upper()
+        target = str(payload.get("target") or payload.get("nas_ip") or payload.get("nas") or "").strip()
+
+        if event_type == "SNMP_TELEMETRY" or "SNMP" in evidence:
+            key = target or source or "unknown-snmp-device"
+            device = devices.setdefault(
+                key,
+                {
+                    "id": key,
+                    "name": payload.get("sysName") or payload.get("name"),
+                    "description": payload.get("sysDescr") or payload.get("description"),
+                    "interfaces": [],
+                    "sources": set(),
+                },
+            )
+            device["sources"].add(source or "snmp")
+            interfaces = payload.get("interfaces")
+            if isinstance(interfaces, list):
+                device["interfaces"] = interfaces[:256]
+            neighbors = payload.get("lldp_neighbors")
+            if isinstance(neighbors, list):
+                for neighbor in neighbors[:256]:
+                    if not isinstance(neighbor, dict):
+                        continue
+                    links.append(
+                        {
+                            "local": key,
+                            "local_port": neighbor.get("local_port"),
+                            "remote": neighbor.get("remote_system") or neighbor.get("remote_chassis"),
+                            "remote_port": neighbor.get("remote_port"),
+                            "evidence": "LLDP_OVER_SNMP",
+                        }
+                    )
+
+        if event_type in {"LLDP_NEIGHBOR", "CDP_NEIGHBOR"}:
+            links.append(dict(payload))
+
+        vlan = payload.get("vlan") or payload.get("vlan_id") or payload.get("tunnel_private_group_id")
+        if vlan not in {None, ""}:
+            vlans[str(vlan)] += 1
+        port = payload.get("port") or payload.get("nas_port_id") or payload.get("switch_port")
+        if port not in {None, ""}:
+            ports[str(port)] += 1
+
+    output_devices = []
+    for device in devices.values():
+        row = dict(device)
+        row["sources"] = sorted(device["sources"])
+        output_devices.append(row)
+
+    return {
+        "state": "EVIDENCE_PRESENT" if output_devices or links or vlans or ports else "NO_INFRASTRUCTURE_EVIDENCE",
+        "devices": output_devices,
+        "links": links[:500],
+        "vlans": [{"vlan": key, "observations": count} for key, count in vlans.most_common(100)],
+        "ports": [{"port": key, "observations": count} for key, count in ports.most_common(100)],
+        "truth_note": "Inventory is evidence-backed; no switch, VLAN or physical link is invented from IP traffic alone.",
     }
 
 
@@ -129,8 +208,16 @@ def install_enterprise_soc(app: FastAPI) -> FastAPI:
     async def system_soc_overview() -> dict[str, Any]:
         return soc_overview(app)
 
+    @app.get("/api/v1/system/infrastructure-inventory")
+    async def system_infrastructure_inventory() -> dict[str, Any]:
+        return infrastructure_inventory(app)
+
     @app.get("/api/v1/admin/soc/pivot/{target}")
-    async def admin_soc_pivot(target: str, request: Request, x_campus_admin: str | None = Header(default=None)) -> dict[str, Any]:
+    async def admin_soc_pivot(
+        target: str,
+        request: Request,
+        x_campus_admin: str | None = Header(default=None),
+    ) -> dict[str, Any]:
         _require_admin(app, request, x_campus_admin)
         return target_pivot(app, target)
 
