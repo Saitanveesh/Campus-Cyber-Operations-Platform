@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from threading import RLock
 from typing import Any
 
-from campus_ops.models import Event, Severity
+from campus_ops.models import Event, EventKind, Severity
 
 
 class LiveState:
@@ -98,7 +98,11 @@ class LiveState:
                 self.packet_feed.appendleft(item)
             elif event.payload.get("type") != "PERFORMANCE":
                 self.events.appendleft(item)
-            if event.severity in {Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL}:
+            if event.kind == EventKind.ALERT and event.severity in {
+                Severity.MEDIUM,
+                Severity.HIGH,
+                Severity.CRITICAL,
+            }:
                 self.alerts.appendleft(item)
             return True
 
