@@ -33,6 +33,15 @@ class VoiceAlertWorker(BaseWorker):
         self._speaker_task: asyncio.Task[None] | None = None
         self._speech_lock = asyncio.Lock()
 
+    @staticmethod
+    def _clean_text(text: str) -> str:
+        cleaned = text.replace(
+            "Welcome back, Sai Tanveesh. Live Operations Console is starting.",
+            "Welcome back.",
+        )
+        cleaned = cleaned.replace("Sai Tanveesh, ", "").replace("Sai Tanveesh", "")
+        return " ".join(cleaned.split())
+
     def mute_for(self, seconds: int) -> None:
         seconds = max(1, min(seconds, 24 * 60 * 60))
         self._muted_until = time.monotonic() + seconds
@@ -118,13 +127,14 @@ class VoiceAlertWorker(BaseWorker):
         return False, f"{first_error}; {fallback_error}".strip("; ")
 
     async def speak(self, text: str, critical: bool = False, force: bool = False) -> bool:
+        text = self._clean_text(text)
         if os.name != "nt":
             self._last_speech_error = "voice synthesis is available only on Windows"
             return False
         if self.muted and not force:
             self._last_speech_error = "voice is muted"
             return False
-        if not text.strip():
+        if not text:
             return False
 
         async with self._speech_lock:
@@ -163,7 +173,7 @@ class VoiceAlertWorker(BaseWorker):
         critical: bool = False,
         force: bool = False,
     ) -> bool:
-        text = text.strip()
+        text = self._clean_text(text)
         if not text:
             return False
         item = (max(0, min(priority, 100)), next(self._sequence), text[:400], critical, force)
