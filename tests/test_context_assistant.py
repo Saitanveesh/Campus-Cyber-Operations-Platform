@@ -64,7 +64,7 @@ def test_security_brief_identifies_incident_and_confidence():
     text = page_briefing(_snapshot(), "security")
     assert "Suspicious fan-out" in text
     assert "confidence 82 percent" in text
-    assert "4 correlated alerts" in text
+    assert "4 distinct correlated alerts" in text
 
 
 def test_topology_brief_identifies_busiest_relationship():
