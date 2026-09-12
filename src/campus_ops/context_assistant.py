@@ -74,12 +74,14 @@ def _incident_detail(incident: dict[str, Any]) -> str:
     source = str(incident.get("source") or "unknown source")
     confidence = int(_number(incident.get("confidence")))
     alert_count = int(_number(incident.get("alert_count")))
+    signal_types = len([item for item in _list(incident.get("alert_types")) if item])
     evidence = _dict(incident.get("latest_evidence"))
 
-    detail = (
-        f"{title}, {severity} severity, source {source}, confidence {confidence} percent, "
-        f"with {alert_count} distinct correlated alert{'s' if alert_count != 1 else ''}"
-    )
+    detail = f"{title}, {severity} severity, source {source}, confidence {confidence} percent"
+    if signal_types:
+        detail += f", with {signal_types} correlated signal type{'s' if signal_types != 1 else ''}"
+    elif alert_count:
+        detail += f", with {alert_count} retained evidence event{'s' if alert_count != 1 else ''}"
     target = evidence.get("target") or evidence.get("destination") or evidence.get("dst")
     if target and str(target) != source:
         detail += f", targeting {target}"
@@ -280,6 +282,12 @@ def install_context_assistant(app: FastAPI) -> FastAPI:
     if getattr(app.state, "context_assistant_installed", False):
         return app
     app.state.context_assistant_installed = True
+
+    @app.post("/api/v1/system/assistant/stop")
+    async def context_stop() -> dict[str, object]:
+        orchestrator = app.state.orchestrator
+        await orchestrator.voice.cancel_speech(clear_queue=True)
+        return {"stopped": True, "voice": orchestrator.voice.status()}
 
     @app.post("/api/v1/system/assistant/context/{view}")
     async def context_brief(view: str) -> dict[str, object]:
