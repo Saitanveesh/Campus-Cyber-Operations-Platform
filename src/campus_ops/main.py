@@ -14,6 +14,7 @@ from campus_ops.config import DEFAULT_SETTINGS
 from campus_ops.enterprise_detection import install_enterprise_detection
 from campus_ops.enterprise_forensics import install_enterprise_forensics
 from campus_ops.enterprise_layer import install_enterprise_layer
+from campus_ops.enterprise_operations import install_enterprise_operations
 from campus_ops.network_depth_layer import install_network_depth_layer
 from campus_ops.runtime_ui import install_runtime_extensions
 
@@ -53,6 +54,7 @@ def build_app():
     app = install_enterprise_forensics(app)
     app = install_network_depth_layer(app)
     app = install_enterprise_detection(app)
+    app = install_enterprise_operations(app)
 
     if startup_handlers or shutdown_handlers:
         original_lifespan = app.router.lifespan_context
