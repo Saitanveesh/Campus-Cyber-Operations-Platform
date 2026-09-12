@@ -22,6 +22,7 @@ def test_capability_status_scores_ready_core_capabilities():
         "malware-analysis": healthy,
         "local-host-telemetry": healthy,
         "endpoint-identity": healthy,
+        "windows-security-telemetry": healthy,
         "syslog-receiver": healthy,
         "flow-telemetry-receiver": healthy,
         "snmp-poller": healthy,
@@ -30,7 +31,7 @@ def test_capability_status_scores_ready_core_capabilities():
         "asset-engine": healthy,
         "identity-engine": healthy,
         "risk-graph": healthy,
-        "response-scheduler": healthy,
+        "job-scheduler": healthy,
     }
 
     result = capability_status({"tools": tools, "workers": workers})
@@ -39,6 +40,7 @@ def test_capability_status_scores_ready_core_capabilities():
     assert result["core_ready"] == result["core_total"]
     rows = {row["key"]: row for row in result["capabilities"]}
     assert rows["live_packet_visibility"]["state"] == "READY"
+    assert rows["windows_security_posture"]["state"] == "READY"
     assert rows["network_ids"]["state"] in {"PARTIAL", "MISSING"}
 
 
