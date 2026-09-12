@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import secrets
 import time
@@ -10,6 +11,7 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from campus_ops.control import EnrolledEndpoint
 from campus_ops.investigation import build_investigation, deep_probe
 from campus_ops.policy import Role
 
@@ -26,6 +28,15 @@ class AdminProbeRequest(BaseModel):
 
 class AdminConnectRequest(BaseModel):
     protocol: str
+
+
+class AdminRemoteEnrollRequest(BaseModel):
+    target: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=128)
+    platform: str = Field(default="windows", max_length=16)
+    ssh_user: str = Field(default="", max_length=128)
+    allow_ssh: bool = True
+    allow_rdp: bool = False
 
 
 @dataclass(slots=True)
@@ -89,6 +100,16 @@ def _require_admin(request: Request, token: str | None, store: AdminSessionStore
         raise HTTPException(status_code=401, detail="administrator authentication required")
 
 
+def _private_target(value: str) -> str:
+    try:
+        ip = ipaddress.ip_address(value.strip())
+    except ValueError as exc:
+        raise ValueError("remote access enrollment requires a valid IP address") from exc
+    if not ip.is_private or ip.is_loopback or ip.is_multicast or ip.is_unspecified:
+        raise ValueError("remote access enrollment is restricted to private lab IP addresses")
+    return str(ip)
+
+
 def _management_ip(snapshot: dict[str, Any]) -> str | None:
     network = snapshot.get("network") if isinstance(snapshot.get("network"), dict) else {}
     raw = network.get("ipv4")
@@ -119,39 +140,59 @@ def _admin_targets(snapshot: dict[str, Any]) -> list[dict[str, object]]:
     agents = [item for item in snapshot.get("managed_agents", []) if isinstance(item, dict)]
     endpoints = [item for item in snapshot.get("enrolled_endpoints", []) if isinstance(item, dict)]
 
+    asset_by_ip = {str(item.get("ip") or ""): item for item in assets if item.get("ip")}
     agent_by_ip: dict[str, dict[str, Any]] = {}
     for agent in agents:
         telemetry = agent.get("telemetry") if isinstance(agent.get("telemetry"), dict) else {}
-        for address in telemetry.get("network_addresses", []) if isinstance(telemetry.get("network_addresses"), list) else []:
+        addresses = telemetry.get("network_addresses")
+        if not isinstance(addresses, list):
+            continue
+        for address in addresses:
             if isinstance(address, dict) and address.get("address"):
                 agent_by_ip[str(address["address"])] = agent
-    endpoint_by_host = {str(item.get("host") or ""): item for item in endpoints}
+    endpoint_by_host = {
+        str(item.get("host") or ""): item for item in endpoints if item.get("host")
+    }
 
+    all_targets = set(asset_by_ip) | set(agent_by_ip) | set(endpoint_by_host)
     rows: list[dict[str, object]] = []
-    for asset in assets:
-        ip = str(asset.get("ip") or "")
-        if not ip:
-            continue
+    for ip in all_targets:
+        asset = asset_by_ip.get(ip, {})
         agent = agent_by_ip.get(ip)
         endpoint = endpoint_by_host.get(ip)
         rows.append(
             {
                 "ip": ip,
-                "name": asset.get("hostname") or asset.get("dhcp_hostname") or (agent or {}).get("name") or "",
-                "classification": asset.get("classification") or asset.get("role") or "OBSERVED_PEER",
-                "last_seen": asset.get("last_seen"),
+                "name": asset.get("hostname")
+                or asset.get("dhcp_hostname")
+                or (agent or {}).get("name")
+                or (endpoint or {}).get("name")
+                or "",
+                "classification": asset.get("classification")
+                or asset.get("role")
+                or ("MANAGED_ENDPOINT" if agent else "REMOTE_ENDPOINT" if endpoint else "OBSERVED_PEER"),
+                "last_seen": asset.get("last_seen") or (agent or {}).get("last_seen"),
                 "packets": asset.get("packets_as_source") or 0,
                 "managed": bool(agent),
                 "agent_id": (agent or {}).get("endpoint_id"),
                 "agent_status": (agent or {}).get("status"),
-                "isolation_state": ((agent or {}).get("telemetry") or {}).get("isolation_state") if agent else None,
+                "isolation_state": ((agent or {}).get("telemetry") or {}).get("isolation_state")
+                if agent
+                else None,
                 "remote_enrolled": bool(endpoint),
                 "allow_ssh": bool((endpoint or {}).get("allow_ssh")),
                 "allow_rdp": bool((endpoint or {}).get("allow_rdp")),
+                "ssh_user": str((endpoint or {}).get("ssh_user") or ""),
                 "remote_endpoint_id": (endpoint or {}).get("endpoint_id"),
             }
         )
-    rows.sort(key=lambda item: (not bool(item["managed"]), not bool(item["remote_enrolled"]), str(item["ip"])))
+    rows.sort(
+        key=lambda item: (
+            not bool(item["managed"]),
+            not bool(item["remote_enrolled"]),
+            str(item["ip"]),
+        )
+    )
     return rows
 
 
@@ -207,6 +248,32 @@ def install_admin_routes(app: FastAPI) -> FastAPI:
         _require_admin(request, x_campus_admin, store)
         snapshot = app.state.orchestrator.snapshot()
         return {"targets": _admin_targets(snapshot)}
+
+    @app.post("/api/v1/admin/remote/enroll")
+    async def admin_remote_enroll(
+        body: AdminRemoteEnrollRequest,
+        request: Request,
+        x_campus_admin: str | None = Header(default=None),
+    ) -> dict[str, object]:
+        _require_admin(request, x_campus_admin, store)
+        try:
+            target = _private_target(body.target)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        platform = body.platform.lower().strip()
+        if platform not in {"windows", "linux", "other"}:
+            raise HTTPException(status_code=400, detail="platform must be windows, linux or other")
+        endpoint_id = "admin-" + target.replace(":", "-").replace(".", "-")
+        endpoint = EnrolledEndpoint(
+            endpoint_id=endpoint_id,
+            name=body.name.strip(),
+            host=target,
+            platform=platform,
+            allow_rdp=body.allow_rdp,
+            allow_ssh=body.allow_ssh,
+            ssh_user=body.ssh_user.strip(),
+        )
+        return {"endpoint": app.state.orchestrator.control.enroll(endpoint)}
 
     @app.get("/api/v1/admin/forensics/{target}")
     async def admin_forensics(
