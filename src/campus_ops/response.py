@@ -10,6 +10,8 @@ ACTION_MAP: dict[str, ControlAction] = {
     "STOP_PROCESS": ControlAction.STOP_PROCESS,
     "QUARANTINE_FILE": ControlAction.QUARANTINE_FILE,
     "BLOCK_REMOTE_IP": ControlAction.BLOCK_REMOTE_IP,
+    "ISOLATE_HOST": ControlAction.ISOLATE_HOST,
+    "RESTORE_NETWORK": ControlAction.RESTORE_NETWORK,
 }
 
 
@@ -48,12 +50,19 @@ class ResponseEngine:
             arguments,
             created_by=operator,
         )
+        disruptive = normalized in {
+            "STOP_PROCESS",
+            "QUARANTINE_FILE",
+            "BLOCK_REMOTE_IP",
+            "ISOLATE_HOST",
+            "RESTORE_NETWORK",
+        }
         await self.bus.publish(
             Event(
                 source="response-engine",
                 kind=EventKind.ACTION,
                 session_id=self.session_provider(),
-                severity=Severity.MEDIUM if normalized != "COLLECT_SNAPSHOT" else Severity.INFO,
+                severity=Severity.MEDIUM if disruptive else Severity.INFO,
                 evidence_class="OPERATOR_AUTHORIZED_ACTION",
                 payload={
                     "action": "RESPONSE_JOB_QUEUED",
@@ -65,7 +74,6 @@ class ResponseEngine:
                     "role": role.value,
                     "arguments": dict(arguments or {}),
                     "message": f"{normalized.replace('_', ' ').title()} queued for {endpoint_id}",
-                    "voice": f"Response action queued for {endpoint_id}.",
                 },
             )
         )
@@ -73,6 +81,17 @@ class ResponseEngine:
 
     async def record_result(self, job: dict[str, object]) -> None:
         status = str(job.get("status") or "UNKNOWN")
+        payload: dict[str, object] = {
+            "action": "RESPONSE_JOB_RESULT",
+            "response_action": job.get("action"),
+            "endpoint_id": job.get("endpoint_id"),
+            "job_id": job.get("job_id"),
+            "status": status,
+            "result": job.get("result"),
+            "message": f"Response job {status.lower()}",
+        }
+        if status in {"FAILED", "REJECTED"}:
+            payload["voice"] = f"Response job {status.lower()}."
         await self.bus.publish(
             Event(
                 source="response-engine",
@@ -80,15 +99,6 @@ class ResponseEngine:
                 session_id=self.session_provider(),
                 severity=Severity.INFO if status == "SUCCEEDED" else Severity.MEDIUM,
                 evidence_class="AGENT_RESPONSE_RESULT",
-                payload={
-                    "action": "RESPONSE_JOB_RESULT",
-                    "response_action": job.get("action"),
-                    "endpoint_id": job.get("endpoint_id"),
-                    "job_id": job.get("job_id"),
-                    "status": status,
-                    "result": job.get("result"),
-                    "message": f"Response job {status.lower()}",
-                    "voice": f"Response job {status.lower()}.",
-                },
+                payload=payload,
             )
         )
