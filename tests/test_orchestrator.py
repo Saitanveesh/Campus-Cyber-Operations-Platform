@@ -37,6 +37,7 @@ def test_snapshot_has_full_worker_fabric_before_start(tmp_path, monkeypatch):
         "malware-analysis",
         "telemetry",
         "local-host-telemetry",
+        "windows-security-telemetry",
         "wifi-telemetry",
         "syslog-receiver",
         "flow-telemetry-receiver",
