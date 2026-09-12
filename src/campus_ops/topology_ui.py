@@ -6,6 +6,7 @@ TOPOLOGY_EXTENSION = r"""
 #topologyCanvas{background:#fff;min-height:560px}
 #topologyCanvas svg{display:block;width:100%;height:100%;user-select:none}
 .topo-layer{fill:#777;font:700 10px Arial,Helvetica,sans-serif;letter-spacing:.12em}
+.topo-vlan{fill:#555;font:700 9px Arial,Helvetica,sans-serif;letter-spacing:.08em}
 .topo-guide{stroke:#dedede;stroke-width:1;stroke-dasharray:4 6}
 .topo-edge{stroke:#a9a9a9;fill:none;stroke-linecap:round;transition:stroke-width .2s,opacity .2s}
 .topo-edge.recent{stroke:#111;stroke-dasharray:7 5;animation:topoDash 1.2s linear infinite}
@@ -24,7 +25,7 @@ TOPOLOGY_EXTENSION = r"""
 .topo-legend .recent:before{border-top:2px dashed #111}
 .topo-mode{border:1px solid #111;background:#fff;padding:7px 9px;font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
 .topo-mode.active{background:#111;color:#fff}
-.topo-statbar{display:grid;grid-template-columns:repeat(5,1fr);border-left:1px solid #c7c7c7;border-top:1px solid #c7c7c7;margin:12px 0}
+.topo-statbar{display:grid;grid-template-columns:repeat(6,1fr);border-left:1px solid #c7c7c7;border-top:1px solid #c7c7c7;margin:12px 0}
 .topo-stat{padding:10px;border-right:1px solid #c7c7c7;border-bottom:1px solid #c7c7c7}
 .topo-stat b{display:block;font-size:17px;margin-top:4px}
 @keyframes topoDash{to{stroke-dashoffset:-24}}
@@ -40,6 +41,7 @@ const T=id=>document.getElementById(id);
 const h=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const n=v=>Number(v||0).toLocaleString();
 const shortBytes=v=>{v=Number(v||0);return v>=1e9?(v/1e9).toFixed(1)+' GB':v>=1e6?(v/1e6).toFixed(1)+' MB':v>=1e3?(v/1e3).toFixed(1)+' KB':v+' B'};
+const shortBits=v=>{v=Number(v||0);return v>=1e9?(v/1e9).toFixed(1)+' Gbps':v>=1e6?(v/1e6).toFixed(1)+' Mbps':v>=1e3?(v/1e3).toFixed(1)+' Kbps':v.toFixed(0)+' bps'};
 const ageSeconds=v=>{if(!v)return 1e9;const t=new Date(v).getTime();return Number.isFinite(t)?Math.max(0,(Date.now()-t)/1000):1e9};
 
 function injectTopologyControls(){
@@ -68,7 +70,7 @@ function injectTopologyControls(){
   }
   if(!T('topologyFlowLens')){
     const section=document.createElement('section');section.id='topologyFlowLens';
-    section.innerHTML='<div class="sectionhead"><h2>Live Flow Lens</h2><div class="note" id="flowLensNote"></div></div><div class="tablewrap"><table><thead><tr><th>Source</th><th>Destination</th><th>Transport</th><th>Protocol</th><th>Application</th><th>Packets</th><th>Bytes</th><th>Last Seen</th></tr></thead><tbody id="topologyFlowRows"></tbody></table></div>';
+    section.innerHTML='<div class="sectionhead"><h2>Live Flow Lens</h2><div class="note" id="flowLensNote"></div></div><div class="tablewrap"><table><thead><tr><th>Source</th><th>Destination</th><th>Transport</th><th>Protocol</th><th>Application</th><th>PPS</th><th>Rate</th><th>Packets</th><th>Bytes</th><th>Last Seen</th></tr></thead><tbody id="topologyFlowRows"></tbody></table></div>';
     view.appendChild(section);
   }
   const find=T('topologyFind');if(find)find.onclick=()=>{const q=(T('topologySearch')?.value||'').trim().toLowerCase();if(!q||!topoLastLive)return;const assets=topoLastLive.assets||[];const ids=[...new Set([...(assets.map(a=>a.ip)),...((topoLastLive.topology_edges||[]).flatMap(e=>[e.source,e.target]))].filter(Boolean))];const asset=assets.find(a=>String(a.hostname||a.dhcp_hostname||'').toLowerCase().includes(q));const found=ids.find(id=>String(id).toLowerCase().includes(q))||asset?.ip;if(found)advancedSelectNode(found);};
@@ -86,43 +88,45 @@ function categoryFor(id,assets,edges){
   if(erole.includes('SENSOR'))return 'sensor';if(erole.includes('GATEWAY')||erole.includes('INFRASTRUCTURE'))return 'infra';if(erole.includes('PUBLIC')||erole.includes('OFF_SUBNET'))return 'external';
   return 'local';
 }
-function nodeLabel(id,asset){const host=asset?.hostname||asset?.dhcp_hostname||asset?.name||'';return {main:id,sub:host&&host!==id?host:String(asset?.classification||asset?.role||'')};}
+function nodeLabel(id,asset){const host=asset?.hostname||asset?.dhcp_hostname||asset?.name||'';const vlan=asset?.vlan_id?`VLAN ${asset.vlan_id}`:'';const secondary=host&&host!==id?host:String(asset?.classification||asset?.role||'');return {main:id,sub:[secondary,vlan].filter(Boolean).join(' · ')};}
 function riskMap(live){const graph=(live.metrics||{}).risk_graph||{};const m={};for(const node of graph.nodes||[])m[String(node.id)]=Number(node.risk||0);return m;}
 function layout(ids,assets,edges){
   const groups={external:[],infra:[],local:[],sensor:[]};for(const id of ids)groups[categoryFor(id,assets,edges)].push(id);
   for(const key of Object.keys(groups))groups[key].sort((a,b)=>{const av=String(assets.get(a)?.vlan_id||'');const bv=String(assets.get(b)?.vlan_id||'');return av.localeCompare(bv)||a.localeCompare(b);});
   const pos={};const W=1200;const layers=[['external',75],['infra',190],['local',340],['sensor',485]];
   for(const [key,y] of layers){const arr=groups[key];arr.forEach((id,i)=>{const x=arr.length===1?W/2:70+i*(W-140)/Math.max(1,arr.length-1);pos[id]={x,y,group:key};});}
-  return {pos,groups,W,H:560};
+  const vlanBuckets={};for(const id of groups.local){const vlan=String(assets.get(id)?.vlan_id||'');if(!vlan)continue;(vlanBuckets[vlan]??=[]).push(pos[id].x);}
+  const vlanCenters=Object.entries(vlanBuckets).map(([vlan,xs])=>({vlan,x:xs.reduce((a,b)=>a+b,0)/xs.length}));
+  return {pos,groups,vlanCenters,W,H:560};
 }
 function edgeInfo(edge){const protocols=Object.entries(edge.protocols||{}).sort((a,b)=>Number(b[1])-Number(a[1])).slice(0,2).map(x=>x[0]);return protocols.join('/')||edge.last_protocol||edge.last_transport||'';}
-function renderStats(live,edges,ids){const recent=edges.filter(e=>ageSeconds(e.last_seen)<10).length;const external=ids.filter(id=>{const a=(live.assets||[]).find(x=>x.ip===id);return roleOfAsset(a).includes('PUBLIC')||roleOfAsset(a).includes('OFF_SUBNET')}).length;const stats=T('topologyStats');if(stats)stats.innerHTML=[['Nodes',ids.length],['Relationships',edges.length],['Recent',recent],['External Peers',external],['Active Flows',(live.flows||[]).length]].map(x=>`<div class="topo-stat"><div class="label">${h(x[0])}</div><b>${h(x[1])}</b></div>`).join('');}
-function renderFlowLens(live){const rows=(live.flows||[]).slice().sort((a,b)=>Number(b.packets||0)-Number(a.packets||0)).slice(0,30);const body=T('topologyFlowRows');if(body)body.innerHTML=rows.map(f=>`<tr><td class="mono">${h(f.src)}:${h(f.src_port||'')}</td><td class="mono">${h(f.dst)}:${h(f.dst_port||'')}</td><td>${h(f.transport||'—')}</td><td>${h(f.protocol||'—')}</td><td>${h(f.dns_query||f.tls_sni||f.http_host||'—')}</td><td>${n(f.packets)}</td><td>${shortBytes(f.bytes)}</td><td>${h(f.last_seen?new Date(f.last_seen).toLocaleTimeString():'—')}</td></tr>`).join('')||'<tr><td colspan="8" class="muted">No active flows</td></tr>';const note=T('flowLensNote');if(note)note.textContent=rows.length?`${rows.length} busiest current flows`:'Waiting for live flow data';}
+function renderStats(live,edges,ids){const recent=edges.filter(e=>ageSeconds(e.last_seen)<10).length;const external=ids.filter(id=>{const a=(live.assets||[]).find(x=>x.ip===id);return roleOfAsset(a).includes('PUBLIC')||roleOfAsset(a).includes('OFF_SUBNET')}).length;const totalRate=edges.reduce((sum,e)=>sum+Number(e.bps_ewma||0),0);const stats=T('topologyStats');if(stats)stats.innerHTML=[['Nodes',ids.length],['Relationships',edges.length],['Recent',recent],['External Peers',external],['Active Flows',(live.flows||[]).length],['Observed Rate',shortBits(totalRate)]].map(x=>`<div class="topo-stat"><div class="label">${h(x[0])}</div><b>${h(x[1])}</b></div>`).join('');}
+function renderFlowLens(live){const rows=(live.flows||[]).slice().sort((a,b)=>Number(b.bps_ewma||b.packets||0)-Number(a.bps_ewma||a.packets||0)).slice(0,30);const body=T('topologyFlowRows');if(body)body.innerHTML=rows.map(f=>`<tr><td class="mono">${h(f.src)}:${h(f.src_port||'')}</td><td class="mono">${h(f.dst)}:${h(f.dst_port||'')}</td><td>${h(f.transport||'—')}</td><td>${h(f.protocol||'—')}</td><td>${h(f.dns_query||f.tls_sni||f.http_host||'—')}</td><td>${Number(f.pps_ewma||0).toFixed(1)}</td><td>${shortBits(f.bps_ewma||0)}</td><td>${n(f.packets)}</td><td>${shortBytes(f.bytes)}</td><td>${h(f.last_seen?new Date(f.last_seen).toLocaleTimeString():'—')}</td></tr>`).join('')||'<tr><td colspan="10" class="muted">No active flows</td></tr>';const note=T('flowLensNote');if(note)note.textContent=rows.length?`${rows.length} busiest current flows`:'Waiting for live flow data';}
 
 function advancedSelectNode(id){
   topoSelected=id;try{selectedNode=id}catch{};advancedRender(topoLastLive||{});
-  const live=topoLastLive||{},asset=(live.assets||[]).find(a=>a.ip===id)||{},edges=(live.topology_edges||[]).filter(e=>e.source===id||e.target===id).sort((a,b)=>Number(b.packets||0)-Number(a.packets||0));
+  const live=topoLastLive||{},asset=(live.assets||[]).find(a=>a.ip===id)||{},edges=(live.topology_edges||[]).filter(e=>e.source===id||e.target===id).sort((a,b)=>Number(b.bps_ewma||b.packets||0)-Number(a.bps_ewma||a.packets||0));
   if(T('selectedNode'))T('selectedNode').textContent=id||'None';
   if(T('selectedNodeKv'))T('selectedNodeKv').innerHTML=[['Role',asset.role||asset.classification||'Observed peer'],['Name',asset.hostname||asset.dhcp_hostname||'—'],['MAC',asset.mac||'—'],['Vendor',asset.vendor||'—'],['OS Hint',asset.os_guess||'—'],['VLAN',asset.vlan_id||'—'],['Last Seen',asset.last_seen?new Date(asset.last_seen).toLocaleTimeString():'—']].flatMap(x=>[`<div>${h(x[0])}</div>`,`<div>${h(x[1])}</div>`]).join('');
-  if(T('selectedConnections'))T('selectedConnections').innerHTML=edges.slice(0,20).map(e=>{const peer=e.source===id?e.target:e.source;const dir=e.source===id?'→':'←';const app=e.last_application||e.last_tls_sni||e.last_dns_query||e.last_http_host||'';return `<div style="padding:7px 0;border-bottom:1px solid #ddd"><b class="mono">${dir} ${h(peer)}</b><div>${h(edgeInfo(e)||'traffic')} · ${n(e.packets)} packets · ${shortBytes(e.bytes)}</div>${app?`<div class="muted">${h(app)}</div>`:''}</div>`}).join('')||'No live relationships for this node';
+  if(T('selectedConnections'))T('selectedConnections').innerHTML=edges.slice(0,20).map(e=>{const peer=e.source===id?e.target:e.source;const dir=e.source===id?'→':'←';const app=e.last_application||e.last_tls_sni||e.last_dns_query||e.last_http_host||'';return `<div style="padding:7px 0;border-bottom:1px solid #ddd"><b class="mono">${dir} ${h(peer)}</b><div>${h(edgeInfo(e)||'traffic')} · ${Number(e.pps_ewma||0).toFixed(1)} pps · ${shortBits(e.bps_ewma||0)}</div><div>${n(e.packets)} packets · ${shortBytes(e.bytes)}</div>${app?`<div class="muted">${h(app)}</div>`:''}</div>`}).join('')||'No live relationships for this node';
 }
 
 function advancedRender(live){
   topoLastLive=live;injectTopologyControls();const canvas=T('topologyCanvas');if(!canvas)return;
   const assetsList=live.assets||[],edgesAll=live.topology_edges||[],assets=new Map(assetsList.filter(a=>a.ip).map(a=>[a.ip,a]));
-  let edges=edgesAll.slice().sort((a,b)=>Number(b.packets||0)-Number(a.packets||0));
+  let edges=edgesAll.slice().sort((a,b)=>Number(b.bps_ewma||b.packets||0)-Number(a.bps_ewma||a.packets||0));
   const risk=riskMap(live);if(topoMode==='risk')edges=edges.filter(e=>(risk[e.source]||0)>0||(risk[e.target]||0)>0);else if(topoMode==='flows')edges=edges.slice(0,350);else edges=edges.slice(0,250);
   let ids=[...new Set([...assets.keys(),...edges.flatMap(e=>[e.source,e.target])].filter(Boolean))];
-  if(topoMode==='risk'){const risky=ids.filter(id=>(risk[id]||0)>0);if(risky.length)ids=risky;}
   if(!ids.length){canvas.innerHTML='<div class="empty">No live topology data</div>';renderStats(live,[],[]);renderFlowLens(live);return;}
-  ids=ids.slice(0,120);const idSet=new Set(ids);edges=edges.filter(e=>idSet.has(e.source)&&idSet.has(e.target));const {pos,groups,W,H}=layout(ids,assets,edges);
+  ids=ids.slice(0,120);const idSet=new Set(ids);edges=edges.filter(e=>idSet.has(e.source)&&idSet.has(e.target));const {pos,groups,vlanCenters,W,H}=layout(ids,assets,edges);
   const marker='<defs><marker id="topoArrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#777"/></marker><marker id="topoArrowHot" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#111"/></marker></defs>';
   const guides=[['EXTERNAL / OFF-SUBNET',75],['GATEWAY / INFRASTRUCTURE',190],['LOCAL / VLAN',340],['SENSOR',485]].map(([label,y])=>`<text class="topo-layer" x="20" y="${y-34}">${label}</text><line class="topo-guide" x1="20" y1="${y-24}" x2="1180" y2="${y-24}"/>`).join('');
-  const maxPackets=Math.max(1,...edges.map(e=>Number(e.packets||0)));
-  const edgeSvg=edges.map(e=>{const a=pos[e.source],b=pos[e.target];if(!a||!b)return '';const recent=ageSeconds(e.last_seen)<8;const selected=topoSelected&&(e.source===topoSelected||e.target===topoSelected);const width=1+Math.min(4,Math.log10(1+Number(e.packets||0))/Math.max(1,Math.log10(1+maxPackets))*4);const opacity=selected?1:(topoMode==='flows' ? 0.82 : 0.48);const cls=`topo-edge ${recent?'recent':''} ${selected?'selected':''}`;const markerId=recent||selected?'topoArrowHot':'topoArrow';let label='';if(selected){const mx=(a.x+b.x)/2,my=(a.y+b.y)/2-4;label=`<text class="topo-edge-label" x="${mx}" y="${my}" text-anchor="middle">${h(edgeInfo(e))} · ${n(e.packets)}</text>`;}return `<line class="${cls}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" style="stroke-width:${width};opacity:${opacity}" marker-end="url(#${markerId})"><title>${h(e.source)} → ${h(e.target)} | ${h(edgeInfo(e))} | ${n(e.packets)} packets | ${shortBytes(e.bytes)}</title></line>${label}`;}).join('');
-  const nodeSvg=ids.map(id=>{const p=pos[id];if(!p)return '';const asset=assets.get(id)||{},label=nodeLabel(id,asset),score=risk[id]||0,selected=id===topoSelected,w=Math.max(104,Math.min(180,64+Math.max(label.main.length,label.sub.length)*6));const cls=`topo-node ${selected?'selected':''} ${score>=70?'risk-high':''}`;const sub=label.sub?`<text class="node-sub" x="0" y="13" text-anchor="middle">${h(label.sub.slice(0,24))}</text>`:'';return `<g class="${cls}" data-topo-node="${h(id)}" transform="translate(${p.x},${p.y})"><rect x="${-w/2}" y="-20" width="${w}" height="40"></rect><text x="0" y="-3" text-anchor="middle">${h(label.main)}</text>${sub}<title>${h(label.main)} | ${h(label.sub)}${score?` | risk ${score}`:''}</title></g>`;}).join('');
+  const vlanLabels=vlanCenters.map(v=>`<text class="topo-vlan" x="${v.x}" y="292" text-anchor="middle">VLAN ${h(v.vlan)}</text>`).join('');
+  const maxPackets=Math.max(1,...edges.map(e=>Number(e.packets||0)));const maxRate=Math.max(1,...edges.map(e=>Number(e.bps_ewma||0)));
+  const edgeSvg=edges.map(e=>{const a=pos[e.source],b=pos[e.target];if(!a||!b)return '';const recent=ageSeconds(e.last_seen)<8;const selected=topoSelected&&(e.source===topoSelected||e.target===topoSelected);const ratio=topoMode==='flows'?Number(e.bps_ewma||0)/maxRate:Number(e.packets||0)/maxPackets;const width=1+Math.min(4,Math.sqrt(Math.max(0,ratio))*4);const opacity=selected?1:(topoMode==='flows'?0.82:0.48);const cls=`topo-edge ${recent?'recent':''} ${selected?'selected':''}`;const markerId=recent||selected?'topoArrowHot':'topoArrow';let label='';if(selected){const mx=(a.x+b.x)/2,my=(a.y+b.y)/2-4;label=`<text class="topo-edge-label" x="${mx}" y="${my}" text-anchor="middle">${h(edgeInfo(e))} · ${Number(e.pps_ewma||0).toFixed(1)} pps · ${shortBits(e.bps_ewma||0)}</text>`;}return `<line class="${cls}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" style="stroke-width:${width};opacity:${opacity}" marker-end="url(#${markerId})"><title>${h(e.source)} → ${h(e.target)} | ${h(edgeInfo(e))} | ${Number(e.pps_ewma||0).toFixed(1)} pps | ${shortBits(e.bps_ewma||0)} | ${n(e.packets)} packets</title></line>${label}`;}).join('');
+  const nodeSvg=ids.map(id=>{const p=pos[id];if(!p)return '';const asset=assets.get(id)||{},label=nodeLabel(id,asset),score=risk[id]||0,selected=id===topoSelected,w=Math.max(104,Math.min(190,64+Math.max(label.main.length,label.sub.length)*6));const cls=`topo-node ${selected?'selected':''} ${score>=70?'risk-high':''}`;const sub=label.sub?`<text class="node-sub" x="0" y="13" text-anchor="middle">${h(label.sub.slice(0,28))}</text>`:'';return `<g class="${cls}" data-topo-node="${h(id)}" transform="translate(${p.x},${p.y})"><rect x="${-w/2}" y="-20" width="${w}" height="40"></rect><text x="0" y="-3" text-anchor="middle">${h(label.main)}</text>${sub}<title>${h(label.main)} | ${h(label.sub)}${score?` | risk ${score}`:''}</title></g>`;}).join('');
   const groupCounts=`<text class="topo-layer" x="1180" y="41" text-anchor="end">${groups.external.length} EXT · ${groups.infra.length} INFRA · ${groups.local.length} LOCAL · ${groups.sensor.length} SENSOR</text>`;
-  canvas.innerHTML=`<svg viewBox="0 0 ${W} ${H}">${marker}${guides}${groupCounts}${edgeSvg}${nodeSvg}</svg>`;
+  canvas.innerHTML=`<svg viewBox="0 0 ${W} ${H}">${marker}${guides}${vlanLabels}${groupCounts}${edgeSvg}${nodeSvg}</svg>`;
   canvas.querySelectorAll('[data-topo-node]').forEach(el=>el.onclick=()=>advancedSelectNode(el.getAttribute('data-topo-node')));
   renderStats(live,edges,ids);renderFlowLens(live);
 }
