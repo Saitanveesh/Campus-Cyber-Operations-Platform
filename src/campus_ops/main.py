@@ -16,6 +16,7 @@ from campus_ops.depth_engines import install_depth_engines
 from campus_ops.depth_engines_v2 import install_depth_engines_v2
 from campus_ops.enterprise_cases import install_enterprise_cases
 from campus_ops.enterprise_depth_v3 import install_enterprise_depth_v3
+from campus_ops.enterprise_depth_v4 import install_enterprise_depth_v4
 from campus_ops.enterprise_detection import install_enterprise_detection
 from campus_ops.enterprise_forensics import install_enterprise_forensics
 from campus_ops.enterprise_layer import install_enterprise_layer
@@ -63,6 +64,7 @@ def build_app():
     app = install_correlation_fabric(app)
     app = install_depth_engines_v2(app)
     app = install_enterprise_depth_v3(app)
+    app = install_enterprise_depth_v4(app)
     app = install_enterprise_operations(app)
     app = install_enterprise_cases(app)
     app = install_enterprise_soc(app)
