@@ -14,6 +14,7 @@ from campus_ops.control import EndpointControl
 from campus_ops.cyberbit import CyberbitAdapter
 from campus_ops.event_bus import EventBus, Subscription
 from campus_ops.evidence import EvidenceExporter
+from campus_ops.ioc_store import IocStore
 from campus_ops.models import Event, EventKind, Severity, WorkerState
 from campus_ops.response import ResponseEngine
 from campus_ops.state import LiveState
@@ -36,6 +37,7 @@ from campus_ops.workers.history import HistoryWorker
 from campus_ops.workers.identity_engine import IdentityEngineWorker
 from campus_ops.workers.incidents import IncidentCorrelationWorker
 from campus_ops.workers.infrastructure_intelligence import InfrastructureIntelligenceWorker
+from campus_ops.workers.ioc_matcher import IocMatcherWorker
 from campus_ops.workers.lateral_movement import LateralMovementWorker
 from campus_ops.workers.local_host import LocalHostTelemetryWorker
 from campus_ops.workers.malware import MalwareAnalysisWorker
@@ -84,6 +86,7 @@ class Orchestrator:
         self.state = LiveState()
         self.evidence = EvidenceExporter(self.state)
         self.agents = AgentRegistry()
+        self.iocs = IocStore()
         self.cyberbit = CyberbitAdapter()
         self.started_at: datetime | None = None
         self.session_id: str | None = None
@@ -170,6 +173,12 @@ class Orchestrator:
         )
         self.dos_warning = DosEarlyWarningWorker(self.bus, self.get_session_id)
         self.threat_engine = ThreatEngineWorker(self.bus, self.state, self.get_session_id)
+        self.ioc_matcher = IocMatcherWorker(
+            self.bus,
+            self.state,
+            self.iocs,
+            self.get_session_id,
+        )
         self.traffic_baseline = TrafficBaselineWorker(
             self.bus,
             self.state,
@@ -256,6 +265,7 @@ class Orchestrator:
             self.beaconing,
             self.dos_warning,
             self.threat_engine,
+            self.ioc_matcher,
             self.traffic_baseline,
             self.performance_engine,
             self.incidents,
@@ -438,6 +448,7 @@ class Orchestrator:
             "event_bus": self.bus.stats(),
             "enrolled_endpoints": self.control.list(),
             "managed_agents": self.agents.list(),
+            "ioc_watchlist": self.iocs.list(),
             "response_jobs": self.agents.jobs(limit=100),
             "scheduled_actions": self.scheduler.list(limit=100),
             "cyberbit_configured": self.cyberbit.configured,
