@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from typing import Any
 import psutil
 
 AGENT_VERSION = "0.3.0"
+ISOLATION_GROUP = "CampusOps Isolation"
 
 
 def _agent_root() -> Path:
@@ -153,6 +155,7 @@ def collect_telemetry() -> dict[str, Any]:
         "connection_sample": connections,
         "processes": processes[:150],
         "services": _services(),
+        "isolation_state": "ISOLATED" if (_agent_root() / "isolation_state.json").exists() else "NORMAL",
     }
 
 
@@ -250,6 +253,126 @@ def _block_remote_ip(arguments: dict[str, Any]) -> dict[str, Any]:
     return {"remote_ip": remote_ip, "state": "BLOCKED", "rule": rule_name}
 
 
+def _run_powershell(script: str, timeout: float = 25.0) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _isolation_state_path() -> Path:
+    return _agent_root() / "isolation_state.json"
+
+
+def _isolate_host(arguments: dict[str, Any]) -> dict[str, Any]:
+    if os.name != "nt":
+        return {"state": "UNSUPPORTED_ON_THIS_AGENT"}
+    raw_management = str(arguments.get("management_ip") or "").strip()
+    if not raw_management:
+        raise ValueError("management_ip is required to preserve the control channel")
+    management_ip = str(ipaddress.ip_address(raw_management))
+    state_path = _isolation_state_path()
+    if state_path.exists():
+        try:
+            existing = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+        return {
+            "state": "ALREADY_ISOLATED",
+            "management_ip": existing.get("management_ip") or management_ip,
+        }
+
+    query = (
+        "$ErrorActionPreference='Stop'; "
+        "@(Get-NetFirewallProfile | ForEach-Object { "
+        "[PSCustomObject]@{Name=$_.Name;Enabled=$_.Enabled;"
+        "DefaultInboundAction=$_.DefaultInboundAction.ToString();"
+        "DefaultOutboundAction=$_.DefaultOutboundAction.ToString()} "
+        "}) | ConvertTo-Json -Depth 4 -Compress"
+    )
+    current = _run_powershell(query)
+    if current.returncode != 0:
+        raise PermissionError(current.stderr.strip() or "unable to read Windows Firewall profile state")
+    try:
+        profiles = json.loads((current.stdout or "[]").strip() or "[]")
+    except json.JSONDecodeError as exc:
+        raise ValueError("unable to parse Windows Firewall profile state") from exc
+    if isinstance(profiles, dict):
+        profiles = [profiles]
+    if not isinstance(profiles, list) or not profiles:
+        raise ValueError("Windows Firewall profile state is unavailable")
+
+    apply_script = (
+        "$ErrorActionPreference='Stop'; "
+        f"Get-NetFirewallRule -Group '{ISOLATION_GROUP}' -ErrorAction SilentlyContinue | "
+        "Remove-NetFirewallRule -ErrorAction SilentlyContinue; "
+        f"New-NetFirewallRule -DisplayName 'CampusOps Management Out' -Group '{ISOLATION_GROUP}' "
+        f"-Direction Outbound -Action Allow -RemoteAddress '{management_ip}' -Profile Any | Out-Null; "
+        f"New-NetFirewallRule -DisplayName 'CampusOps Management In' -Group '{ISOLATION_GROUP}' "
+        f"-Direction Inbound -Action Allow -RemoteAddress '{management_ip}' -Profile Any | Out-Null; "
+        "Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True "
+        "-DefaultInboundAction Block -DefaultOutboundAction Block"
+    )
+    applied = _run_powershell(apply_script)
+    if applied.returncode != 0:
+        raise PermissionError(applied.stderr.strip() or "host isolation firewall policy failed")
+
+    state = {
+        "management_ip": management_ip,
+        "profiles": profiles,
+        "group": ISOLATION_GROUP,
+        "created_at": time.time(),
+    }
+    state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    return {
+        "state": "ISOLATED",
+        "management_ip": management_ip,
+        "policy": "DEFAULT_BLOCK_WITH_MANAGEMENT_EXCEPTION",
+    }
+
+
+def _restore_network(_arguments: dict[str, Any]) -> dict[str, Any]:
+    if os.name != "nt":
+        return {"state": "UNSUPPORTED_ON_THIS_AGENT"}
+    state_path = _isolation_state_path()
+    if not state_path.exists():
+        return {"state": "NOT_ISOLATED"}
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("saved isolation state is unreadable") from exc
+    profiles = state.get("profiles") if isinstance(state.get("profiles"), list) else []
+    lines = [
+        "$ErrorActionPreference='Stop'",
+        f"Get-NetFirewallRule -Group '{ISOLATION_GROUP}' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue",
+    ]
+    for item in profiles:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("Name") or "").replace("'", "''")
+        if name not in {"Domain", "Private", "Public"}:
+            continue
+        enabled = "$true" if bool(item.get("Enabled")) else "$false"
+        inbound = str(item.get("DefaultInboundAction") or "NotConfigured")
+        outbound = str(item.get("DefaultOutboundAction") or "NotConfigured")
+        if inbound not in {"Allow", "Block", "NotConfigured"}:
+            inbound = "NotConfigured"
+        if outbound not in {"Allow", "Block", "NotConfigured"}:
+            outbound = "NotConfigured"
+        lines.append(
+            f"Set-NetFirewallProfile -Profile '{name}' -Enabled {enabled} "
+            f"-DefaultInboundAction {inbound} -DefaultOutboundAction {outbound}"
+        )
+    restored = _run_powershell("; ".join(lines))
+    if restored.returncode != 0:
+        raise PermissionError(restored.stderr.strip() or "network restoration failed")
+    state_path.unlink(missing_ok=True)
+    return {"state": "RESTORED", "restored_profiles": len(profiles)}
+
+
 def execute_job(job: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     action = str(job.get("action") or "").upper()
     arguments = job.get("arguments") if isinstance(job.get("arguments"), dict) else {}
@@ -262,9 +385,31 @@ def execute_job(job: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             return "SUCCEEDED", _quarantine_file(arguments)
         if action == "BLOCK_REMOTE_IP":
             return "SUCCEEDED", _block_remote_ip(arguments)
+        if action == "ISOLATE_HOST":
+            return "SUCCEEDED", _isolate_host(arguments)
+        if action == "RESTORE_NETWORK":
+            return "SUCCEEDED", _restore_network(arguments)
         return "REJECTED", {"reason": "action is not implemented by this agent"}
-    except (OSError, ValueError, PermissionError, psutil.Error) as exc:
+    except (OSError, ValueError, PermissionError, psutil.Error, subprocess.SubprocessError) as exc:
         return "FAILED", {"reason": str(exc), "type": type(exc).__name__}
+
+
+def _management_ip(base_url: str) -> str:
+    host = urllib.parse.urlsplit(base_url).hostname or ""
+    if not host:
+        raise ValueError("server URL has no hostname")
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    for info in infos:
+        candidate = str(info[4][0]).split("%", 1)[0]
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            continue
+    raise ValueError("unable to resolve management server address")
 
 
 def run_agent(base_url: str, endpoint_id: str, token: str, interval: float) -> int:
@@ -290,7 +435,16 @@ def run_agent(base_url: str, endpoint_id: str, token: str, interval: float) -> i
                 token,
             )
             for job in payload.get("jobs", []):
-                status, result = execute_job(job)
+                executable_job = dict(job)
+                if str(executable_job.get("action") or "").upper() == "ISOLATE_HOST":
+                    arguments = (
+                        dict(executable_job.get("arguments"))
+                        if isinstance(executable_job.get("arguments"), dict)
+                        else {}
+                    )
+                    arguments.setdefault("management_ip", _management_ip(base_url))
+                    executable_job["arguments"] = arguments
+                status, result = execute_job(executable_job)
                 _request(
                     base_url,
                     "POST",
@@ -298,7 +452,7 @@ def run_agent(base_url: str, endpoint_id: str, token: str, interval: float) -> i
                     token,
                     {"status": status, "result": result},
                 )
-        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError) as exc:
             print(f"agent connection error: {exc}", file=sys.stderr)
         time.sleep(interval)
 
