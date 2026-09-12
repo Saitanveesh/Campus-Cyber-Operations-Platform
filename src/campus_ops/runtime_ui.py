@@ -13,6 +13,7 @@ from campus_ops.capabilities import install_capability_routes
 from campus_ops.capability_ui import CAPABILITY_EXTENSION
 from campus_ops.context_assistant import install_context_assistant, page_briefing
 from campus_ops.context_ui import CONTEXT_EXTENSION
+from campus_ops.enterprise_ui import ENTERPRISE_UI_EXTENSION
 from campus_ops.investigation import install_investigation_routes
 from campus_ops.investigation_ui import INVESTIGATION_EXTENSION
 from campus_ops.ioc_api import install_ioc_routes
@@ -119,7 +120,7 @@ def install_runtime_extensions(app: FastAPI) -> FastAPI:
             html = _clean_console_copy(html)
             extended = html.replace(
                 "</body>",
-                f"{UI_EXTENSION}\n{CONTEXT_EXTENSION}\n{CAPABILITY_EXTENSION}\n{INVESTIGATION_EXTENSION}\n{TOPOLOGY_EXTENSION}\n{TRAFFIC_EXTENSION}\n{ADMIN_EXTENSION}\n{ADMIN_DEEP_EXTENSION}\n{IOC_EXTENSION}\n</body>",
+                f"{UI_EXTENSION}\n{CONTEXT_EXTENSION}\n{CAPABILITY_EXTENSION}\n{INVESTIGATION_EXTENSION}\n{TOPOLOGY_EXTENSION}\n{TRAFFIC_EXTENSION}\n{ADMIN_EXTENSION}\n{ADMIN_DEEP_EXTENSION}\n{IOC_EXTENSION}\n{ENTERPRISE_UI_EXTENSION}\n</body>",
             )
             return HTMLResponse(extended, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
         return await call_next(request)
