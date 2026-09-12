@@ -182,7 +182,7 @@ class CaseStore:
 
 
 class _SyslogProtocol(asyncio.DatagramProtocol):
-    def __init__(self, receiver: "PassiveSyslogReceiver") -> None:
+    def __init__(self, receiver: PassiveSyslogReceiver) -> None:
         self.receiver = receiver
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
