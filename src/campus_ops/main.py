@@ -13,6 +13,7 @@ from campus_ops.api import create_app
 from campus_ops.config import DEFAULT_SETTINGS
 from campus_ops.correlation_fabric import install_correlation_fabric
 from campus_ops.depth_engines import install_depth_engines
+from campus_ops.depth_engines_v2 import install_depth_engines_v2
 from campus_ops.enterprise_cases import install_enterprise_cases
 from campus_ops.enterprise_detection import install_enterprise_detection
 from campus_ops.enterprise_forensics import install_enterprise_forensics
@@ -45,9 +46,12 @@ def build_app():
     shutdown_handlers = []
     if not hasattr(app, "add_event_handler"):
         def add_event_handler(event_type: str, handler) -> None:
-            if event_type == "startup": startup_handlers.append(handler)
-            elif event_type == "shutdown": shutdown_handlers.append(handler)
-            else: raise ValueError(f"unsupported lifecycle event: {event_type}")
+            if event_type == "startup":
+                startup_handlers.append(handler)
+            elif event_type == "shutdown":
+                shutdown_handlers.append(handler)
+            else:
+                raise ValueError(f"unsupported lifecycle event: {event_type}")
         app.add_event_handler = add_event_handler  # type: ignore[attr-defined]
     app = install_advanced_layer(app)
     app = install_enterprise_layer(app)
@@ -56,6 +60,7 @@ def build_app():
     app = install_enterprise_detection(app)
     app = install_depth_engines(app)
     app = install_correlation_fabric(app)
+    app = install_depth_engines_v2(app)
     app = install_enterprise_operations(app)
     app = install_enterprise_cases(app)
     app = install_enterprise_soc(app)
@@ -68,10 +73,13 @@ def build_app():
         @asynccontextmanager
         async def combined_lifespan(app_instance):
             async with original_lifespan(app_instance):
-                for handler in startup_handlers: await _run_handler(handler)
-                try: yield
+                for handler in startup_handlers:
+                    await _run_handler(handler)
+                try:
+                    yield
                 finally:
-                    for handler in reversed(shutdown_handlers): await _run_handler(handler)
+                    for handler in reversed(shutdown_handlers):
+                        await _run_handler(handler)
         app.router.lifespan_context = combined_lifespan
     return app
 
