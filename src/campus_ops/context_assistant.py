@@ -4,6 +4,8 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
+from campus_ops.capabilities import capability_status
+
 
 PAGES = {
     "overview",
@@ -291,20 +293,25 @@ def page_briefing(snapshot: dict[str, Any], view: str) -> str:
             and str(raw.get("state") or "").upper() not in {"HEALTHY", "RUNNING"}
         ]
         tools = [item for item in _list(snapshot.get("tools")) if isinstance(item, dict)]
-        missing = [
-            str(item.get("label") or item.get("key") or "tool")
-            for item in tools
-            if bool(item.get("required")) and not bool(item.get("available"))
-        ]
+        available_tools = sum(1 for item in tools if bool(item.get("available")))
         voice = _dict(snapshot.get("voice"))
+        capabilities = capability_status(snapshot)
         text = (
             f"System. {len(workers) - len(unhealthy)} of {len(workers)} workers are healthy or running. "
+            f"{available_tools} of {len(tools)} registered tools are available. "
+            f"Capability readiness is {capabilities.get('score', 0)} percent, with "
+            f"{capabilities.get('core_ready', 0)} of {capabilities.get('core_total', 0)} core capabilities ready. "
             f"The voice engine is {voice.get('engine') or 'not yet selected'}."
         )
         if unhealthy:
             text += f" Workers needing attention: {', '.join(unhealthy[:4])}."
-        if missing:
-            text += f" Required tools missing: {', '.join(missing[:4])}."
+        gaps = _list(capabilities.get("next_gaps"))
+        if gaps and isinstance(gaps[0], dict):
+            gap = gaps[0]
+            missing = [str(item) for item in _list(gap.get("missing_tools")) + _list(gap.get("missing_workers"))]
+            text += f" Highest-value capability gap is {gap.get('label')}."
+            if missing:
+                text += f" Missing checks include {', '.join(missing[:3])}."
         return text
 
     return (
