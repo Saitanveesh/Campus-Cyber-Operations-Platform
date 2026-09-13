@@ -26,6 +26,7 @@ from campus_ops.enterprise_soc import install_enterprise_soc
 from campus_ops.enterprise_telemetry import install_enterprise_telemetry
 from campus_ops.link_state import install_link_state
 from campus_ops.network_depth_layer import install_network_depth_layer
+from campus_ops.operational_readiness import install_operational_readiness
 from campus_ops.operator_refinement import install_operator_refinement
 from campus_ops.red_panel import install_red_panel
 from campus_ops.runtime_ui import install_runtime_extensions
@@ -72,6 +73,7 @@ def build_app():
     app = install_operator_refinement(app)
     app = install_enterprise_telemetry(app)
     app = install_authorized_discovery(app)
+    app = install_operational_readiness(app)
     app = install_link_state(app)
     app = install_red_panel(app)
     if startup_handlers or shutdown_handlers:
