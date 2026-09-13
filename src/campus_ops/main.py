@@ -10,6 +10,7 @@ import uvicorn
 
 from campus_ops.advanced_layer import install_advanced_layer
 from campus_ops.api import create_app
+from campus_ops.authorized_discovery import install_authorized_discovery
 from campus_ops.config import DEFAULT_SETTINGS
 from campus_ops.correlation_fabric import install_correlation_fabric
 from campus_ops.depth_engines import install_depth_engines
@@ -70,6 +71,7 @@ def build_app():
     app = install_enterprise_soc(app)
     app = install_operator_refinement(app)
     app = install_enterprise_telemetry(app)
+    app = install_authorized_discovery(app)
     app = install_link_state(app)
     app = install_red_panel(app)
     if startup_handlers or shutdown_handlers:
