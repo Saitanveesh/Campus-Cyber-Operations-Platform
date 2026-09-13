@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 from campus_ops.correlation_fabric import _valid_ip
 
 
