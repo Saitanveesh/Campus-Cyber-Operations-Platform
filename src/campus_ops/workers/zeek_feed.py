@@ -59,22 +59,21 @@ class ZeekFeedWorker(BaseWorker):
             "uid": record.get("uid"),
         }
         if name == "conn.log":
-            payload = {
-                "type": "ZEEK_CONNECTION",
-                **common,
-                "transport": record.get("proto"),
-                "service": record.get("service"),
-                "duration": record.get("duration"),
-                "orig_bytes": record.get("orig_bytes"),
-                "resp_bytes": record.get("resp_bytes"),
-                "conn_state": record.get("conn_state"),
-            }
             return Event(
                 source="zeek-feed",
                 kind=EventKind.OBSERVATION,
                 session_id=session_id,
                 evidence_class="ZEEK_CONN",
-                payload=payload,
+                payload={
+                    "type": "ZEEK_CONNECTION",
+                    **common,
+                    "transport": record.get("proto"),
+                    "service": record.get("service"),
+                    "duration": record.get("duration"),
+                    "orig_bytes": record.get("orig_bytes"),
+                    "resp_bytes": record.get("resp_bytes"),
+                    "conn_state": record.get("conn_state"),
+                },
             )
         if name == "dns.log":
             return Event(
@@ -157,7 +156,10 @@ class ZeekFeedWorker(BaseWorker):
         emitted = 0
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             handle.seek(offset)
-            for line in handle:
+            while True:
+                line = handle.readline()
+                if not line:
+                    break
                 self._offsets[path] = handle.tell()
                 line = line.strip()
                 if not line or line.startswith("#"):
