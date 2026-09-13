@@ -49,6 +49,7 @@ line-length = 100
 "src/campus_ops/advanced_layer.py" = ["I001", "F401"]
 "src/campus_ops/context_assistant.py" = ["I001"]
 "src/campus_ops/enterprise_layer.py" = ["I001"]
+"src/campus_ops/operator_refinement.py" = ["I001"]
 "src/campus_ops/runtime_ui.py" = ["I001"]
 "src/campus_ops/workers/incidents.py" = ["I001"]
 "src/campus_ops/workers/operations_watchdog.py" = ["SIM114"]
