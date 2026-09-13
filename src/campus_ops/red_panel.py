@@ -81,6 +81,90 @@ def _confidence(*, flow_count: int, signals: int, exposure_count: int) -> int:
     return max(0, min(100, value))
 
 
+def _purple_team_model(
+    exposures: list[dict[str, Any]],
+    peer_count: int,
+    signals: int,
+    managed: bool,
+) -> dict[str, Any]:
+    ports = {int(item["port"]) for item in exposures if isinstance(item.get("port"), int)}
+    rows: list[dict[str, Any]] = []
+
+    def add(technique: str, name: str, evidence: str, telemetry: str) -> None:
+        if signals and managed:
+            coverage = 85
+            detection = "DETECTION_AND_ENDPOINT"
+        elif signals:
+            coverage = 68
+            detection = "DETECTION_PRESENT"
+        elif managed:
+            coverage = 52
+            detection = "ENDPOINT_TELEMETRY_ONLY"
+        else:
+            coverage = 32
+            detection = "NETWORK_TELEMETRY_ONLY"
+        gap = "LOW" if coverage >= 75 else "MEDIUM" if coverage >= 50 else "HIGH"
+        rows.append(
+            {
+                "technique": technique,
+                "name": name,
+                "evidence": evidence,
+                "telemetry": telemetry,
+                "detection_state": detection,
+                "coverage": coverage,
+                "gap": gap,
+                "control_state": "ENDPOINT_AND_NETWORK" if managed else "NETWORK_ONLY",
+            }
+        )
+
+    if 3389 in ports:
+        add("T1021.001", "Remote Desktop Protocol", "RDP traffic observed on TCP/3389", "flow + endpoint" if managed else "flow")
+    if 445 in ports:
+        add("T1021.002", "SMB / Windows Admin Shares", "SMB traffic observed on TCP/445", "flow + endpoint" if managed else "flow")
+    if 22 in ports:
+        add("T1021.004", "SSH", "SSH traffic observed on TCP/22", "flow + endpoint" if managed else "flow")
+    if {5985, 5986} & ports:
+        add("T1021.006", "Windows Remote Management", "WinRM traffic observed", "flow + endpoint" if managed else "flow")
+    if peer_count >= 12:
+        add("T1018", "Remote System Discovery", f"Target has {peer_count} observed peers", "network relationships")
+    if len(exposures) >= 8:
+        add("T1046", "Network Service Discovery", f"{len(exposures)} service classes observed", "service/flow metadata")
+
+    if not rows:
+        rows.append(
+            {
+                "technique": "BASELINE",
+                "name": "No ATT&CK behavior candidate",
+                "evidence": "Current telemetry does not support a specific technique mapping.",
+                "telemetry": "current session",
+                "detection_state": "NO_CANDIDATE",
+                "coverage": 0,
+                "gap": "UNASSESSED",
+                "control_state": "UNASSESSED",
+            }
+        )
+
+    scored = [row["coverage"] for row in rows if row["technique"] != "BASELINE"]
+    coverage_score = round(sum(scored) / len(scored)) if scored else 0
+    gap_score = 100 - coverage_score if scored else 100
+    exercises = [
+        "Validate that authorized remote-service activity produces expected network and endpoint telemetry.",
+        "Confirm east-west segmentation policy for the target and its highest-frequency peers.",
+        "Capture a managed-endpoint snapshot before and after a controlled lab exercise.",
+        "Verify alert-to-case correlation and analyst evidence retention for the exercise.",
+    ]
+    if managed:
+        exercises.append("Validate isolate and restore workflow with explicit operator confirmation in the lab.")
+
+    return {
+        "coverage_score": coverage_score,
+        "detection_gap_score": gap_score,
+        "techniques": rows,
+        "exercise_queue": exercises,
+        "truth_note": "Technique rows are evidence-backed validation candidates, not proof that the technique was executed maliciously.",
+    }
+
+
 def build_red_panel(app: FastAPI, target: str) -> dict[str, Any]:
     target = _target_ip(target)
     live = app.state.orchestrator.state.snapshot()
@@ -90,7 +174,15 @@ def build_red_panel(app: FastAPI, target: str) -> dict[str, Any]:
     incidents = [row for row in live.get("incidents", []) if isinstance(row, dict)]
 
     asset = next((row for row in assets if str(row.get("ip") or row.get("id") or "") == target), None)
-    target_flows = [row for row in flows if target in {str(row.get("src") or row.get("src_ip") or ""), str(row.get("dst") or row.get("dst_ip") or "")}]
+    target_flows = [
+        row
+        for row in flows
+        if target
+        in {
+            str(row.get("src") or row.get("src_ip") or ""),
+            str(row.get("dst") or row.get("dst_ip") or ""),
+        }
+    ]
     ports: Counter[int] = Counter()
     peers: Counter[str] = Counter()
     for flow in target_flows:
@@ -103,7 +195,10 @@ def build_red_panel(app: FastAPI, target: str) -> dict[str, Any]:
     signal_rows: list[dict[str, Any]] = []
     for row in [*alerts, *incidents]:
         payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
-        text = " ".join(str(value) for value in [row.get("title"), row.get("summary"), row.get("source"), *payload.values()])
+        text = " ".join(
+            str(value)
+            for value in [row.get("title"), row.get("summary"), row.get("source"), *payload.values()]
+        )
         if target in text:
             signal_rows.append(row)
 
@@ -121,7 +216,10 @@ def build_red_panel(app: FastAPI, target: str) -> dict[str, Any]:
 
     managed = False
     try:
-        managed = any(str(row.get("host") or row.get("endpoint_id") or "") == target for row in app.state.orchestrator.agents.list())
+        managed = any(
+            str(row.get("host") or row.get("endpoint_id") or "") == target
+            for row in app.state.orchestrator.agents.list()
+        )
     except Exception:
         managed = False
 
@@ -133,20 +231,49 @@ def build_red_panel(app: FastAPI, target: str) -> dict[str, Any]:
         managed=managed,
         flow_count=len(target_flows),
     )
-    confidence = _confidence(flow_count=len(target_flows), signals=len(signal_rows), exposure_count=len(exposures))
+    confidence = _confidence(
+        flow_count=len(target_flows),
+        signals=len(signal_rows),
+        exposure_count=len(exposures),
+    )
     blast_radius = min(100, int((min(len(peers), 60) / 60) * 70 + min(admin_count, 5) * 6))
 
     hypotheses: list[dict[str, str]] = []
     if admin_count:
-        hypotheses.append({"area": "REMOTE_ACCESS", "finding": f"{admin_count} administrative service class(es) are visible in observed traffic; validate authentication and network policy."})
+        hypotheses.append(
+            {
+                "area": "REMOTE_ACCESS",
+                "finding": f"{admin_count} administrative service class(es) are visible in observed traffic; validate authentication and network policy.",
+            }
+        )
     if len(peers) >= 12:
-        hypotheses.append({"area": "LATERAL_MOVEMENT", "finding": f"Target communicates with {len(peers)} peers; validate whether this fan-out matches its expected role."})
+        hypotheses.append(
+            {
+                "area": "LATERAL_MOVEMENT",
+                "finding": f"Target communicates with {len(peers)} peers; validate whether this fan-out matches its expected role.",
+            }
+        )
     if signal_rows:
-        hypotheses.append({"area": "DETECTION", "finding": f"{len(signal_rows)} current-session security signal(s) reference this target."})
+        hypotheses.append(
+            {
+                "area": "DETECTION",
+                "finding": f"{len(signal_rows)} current-session security signal(s) reference this target.",
+            }
+        )
     if any(item["port"] in {445, 3389, 5985, 5986} for item in exposures) and len(peers) >= 8:
-        hypotheses.append({"area": "BLAST_RADIUS", "finding": "Administrative east-west reach plus broad peer fan-out creates a larger containment boundary if the host is compromised."})
+        hypotheses.append(
+            {
+                "area": "BLAST_RADIUS",
+                "finding": "Administrative east-west reach plus broad peer fan-out creates a larger containment boundary if the host is compromised.",
+            }
+        )
     if not hypotheses:
-        hypotheses.append({"area": "BASELINE", "finding": "No strong adversary-emulation hypothesis is supported by current evidence. Start with passive validation."})
+        hypotheses.append(
+            {
+                "area": "BASELINE",
+                "finding": "No strong adversary-emulation hypothesis is supported by current evidence. Start with passive validation.",
+            }
+        )
 
     top_peer_nodes = [peer for peer, _ in peers.most_common(12)]
     attack_path = {
@@ -154,26 +281,59 @@ def build_red_panel(app: FastAPI, target: str) -> dict[str, Any]:
             {"id": target, "kind": "TARGET", "label": target},
             *[{"id": peer, "kind": "PEER", "label": peer} for peer in top_peer_nodes],
             *[
-                {"id": f"svc:{item['port']}", "kind": "SERVICE", "label": f"{item['port']} {item['service_hint']}"}
+                {
+                    "id": f"svc:{item['port']}",
+                    "kind": "SERVICE",
+                    "label": f"{item['port']} {item['service_hint']}",
+                }
                 for item in exposures[:10]
             ],
         ],
         "edges": [
-            *[{"source": target, "target": peer, "kind": "OBSERVED_RELATIONSHIP"} for peer in top_peer_nodes],
             *[
-                {"source": target, "target": f"svc:{item['port']}", "kind": "OBSERVED_SERVICE"}
+                {"source": target, "target": peer, "kind": "OBSERVED_RELATIONSHIP"}
+                for peer in top_peer_nodes
+            ],
+            *[
+                {
+                    "source": target,
+                    "target": f"svc:{item['port']}",
+                    "kind": "OBSERVED_SERVICE",
+                }
                 for item in exposures[:10]
             ],
         ],
     }
 
     validation_plan = [
-        {"phase": "1", "name": "Confirm Identity", "action": "Correlate hostname, MAC, user, endpoint-agent and infrastructure context."},
-        {"phase": "2", "name": "Validate Surface", "action": "Verify observed services only within explicitly authorized scope."},
-        {"phase": "3", "name": "Trace Reach", "action": "Review east-west peers, administrative protocols and segmentation boundaries."},
-        {"phase": "4", "name": "Collect Evidence", "action": "Capture packet, process, event and file evidence before disruptive response."},
-        {"phase": "5", "name": "Contain if Required", "action": "Use managed-host isolation only after operator confirmation and evidence review."},
+        {
+            "phase": "1",
+            "name": "Confirm Identity",
+            "action": "Correlate hostname, MAC, user, endpoint-agent and infrastructure context.",
+        },
+        {
+            "phase": "2",
+            "name": "Validate Surface",
+            "action": "Verify observed services only within explicitly authorized scope.",
+        },
+        {
+            "phase": "3",
+            "name": "Trace Reach",
+            "action": "Review east-west peers, administrative protocols and segmentation boundaries.",
+        },
+        {
+            "phase": "4",
+            "name": "Collect Evidence",
+            "action": "Capture packet, process, event and file evidence before disruptive response.",
+        },
+        {
+            "phase": "5",
+            "name": "Contain if Required",
+            "action": "Use managed-host isolation only after operator confirmation and evidence review.",
+        },
     ]
+
+    purple_team = _purple_team_model(exposures, len(peers), len(signal_rows), managed)
 
     return {
         "target": target,
@@ -190,6 +350,7 @@ def build_red_panel(app: FastAPI, target: str) -> dict[str, Any]:
         "blast_radius": blast_radius,
         "attack_path": attack_path,
         "validation_plan": validation_plan,
+        "purple_team": purple_team,
         "allowed_validation": [
             "Passive evidence pivot",
             "Authorized service verification",
@@ -210,7 +371,11 @@ def install_red_panel(app: FastAPI) -> FastAPI:
     app.state.red_panel_installed = True
 
     @app.get("/api/v1/admin/red-panel/{target}")
-    async def red_panel(target: str, request: Request, x_campus_admin: str | None = Header(default=None)) -> dict[str, Any]:
+    async def red_panel(
+        target: str,
+        request: Request,
+        x_campus_admin: str | None = Header(default=None),
+    ) -> dict[str, Any]:
         _require_admin(app, request, x_campus_admin)
         return build_red_panel(app, target)
 
