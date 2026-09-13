@@ -31,7 +31,7 @@ def test_discovery_rejects_public_or_large_scope():
 
 def test_enterprise_tool_registry_contains_major_planes():
     names = {row[0] for row in TOOLS}
-    for expected in {
+    for expected in (
         "TShark",
         "Zeek",
         "Suricata",
@@ -42,5 +42,5 @@ def test_enterprise_tool_registry_contains_major_planes():
         "Velociraptor",
         "Sigma",
         "YARA",
-    }:
+    ):
         assert expected in names
