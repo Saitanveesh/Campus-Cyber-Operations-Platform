@@ -10,7 +10,6 @@ from uuid import uuid4
 
 from campus_ops.platform_paths import data_root
 
-
 HASH_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
