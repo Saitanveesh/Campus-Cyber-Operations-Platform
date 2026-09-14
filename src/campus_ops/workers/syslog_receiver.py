@@ -40,7 +40,8 @@ def parse_syslog(raw: bytes, address: str) -> dict[str, Any]:
         facility = pri // 8
         severity = pri % 8
     return {
-        "type": "SYSLOG",
+        "type": ("RADIUS_AUTH" if "radius" in text.lower() else
+                 "DOT1X_SESSION" if "802.1x" in text.lower() else "SYSLOG"),
         "sender": address,
         "facility": facility,
         "syslog_severity": severity,
@@ -55,7 +56,13 @@ class SyslogReceiverWorker(BaseWorker):
         super().__init__("syslog-receiver", bus)
         self.session_provider = session_provider
         self.port = port if port is not None else int(os.environ.get("CAMPUS_OPS_SYSLOG_PORT", "5514"))
+        self.host = os.environ.get("CAMPUS_OPS_SYSLOG_BIND", "127.0.0.1")
+        self.received = 0
         self._transport: asyncio.DatagramTransport | None = None
+
+    def status(self) -> dict[str, Any]:
+        return {"bind": self.host, "port": self.port, "received": self.received,
+                "state": str(self.health.state), "listening": self._transport is not None}
 
     async def run(self) -> None:
         queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue(maxsize=2000)
@@ -63,7 +70,7 @@ class SyslogReceiverWorker(BaseWorker):
         try:
             transport, _ = await loop.create_datagram_endpoint(
                 lambda: _SyslogProtocol(queue),
-                local_addr=("0.0.0.0", self.port),
+                local_addr=(self.host, self.port),
             )
         except OSError as exc:
             self.health.state = WorkerState.DEGRADED
@@ -82,6 +89,7 @@ class SyslogReceiverWorker(BaseWorker):
                     self.health.heartbeat(f"listening UDP/{self.port}")
                     continue
                 session_id = self.session_provider()
+                self.received += 1
                 payload = parse_syslog(raw, addr[0])
                 await self.bus.publish(
                     Event(

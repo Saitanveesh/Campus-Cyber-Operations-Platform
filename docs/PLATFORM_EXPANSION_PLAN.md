@@ -1,3 +1,5 @@
+> Historical expansion plan. Ubuntu implementation status and current priorities are maintained in [ARCHITECTURE.md](ARCHITECTURE.md), [TOOL_INTEGRATIONS.md](TOOL_INTEGRATIONS.md) and [RISK_REGISTER.md](RISK_REGISTER.md).
+
 # Campus Cyber Operations Platform — Expansion Plan
 
 This plan keeps the platform aligned to the existing architecture: Network Plane, Endpoint Plane, Control Plane, Normalization Bus, Intelligence Plane, Correlation, Response/SOAR, Evidence, and the Operator Console.

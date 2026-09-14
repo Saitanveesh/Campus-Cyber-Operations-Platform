@@ -1,49 +1,38 @@
 # Campus Cyber Operations Platform
 
-Windows-native cyber operations platform for authorized cyber-range and campus-lab environments.
+Ubuntu-first cyber operations platform for authorized campus and lab environments. The existing black/white/grey operational console is preserved.
 
-## Product direction
+## Current Ubuntu increment
 
-The platform unifies network visibility, protocol and flow intelligence, asset state, topology, performance, threat detection, malware analysis, incident correlation, endpoint control, evidence handling, and operator alerting behind one strict monochrome interface.
+- Native Linux route/interface discovery, systemd service inventory and shared XDG/service state paths.
+- Single Zeek JSON reader and syslog listener, with bounded live-only sensor tailing.
+- Local export adapters for Tetragon, Falco, Wazuh, OpenCanary and Hubble.
+- SQLite evidence graph, source lineage, durable deduplication and separate risk/confidence heuristics.
+- Observe mode by default; optional governed snapshots of online enrolled endpoints.
+- Admin-authenticated validation windows that match expected alerts without claiming attack causality or measured coverage.
+- Ubuntu installer/service and Python 3.12/3.13 CI. Actual sensor deployment and Linux containment remain unvalidated/unimplemented respectively.
 
-### Frozen UI direction
+## Start on Ubuntu
 
-Black / white / grey only. No colorful SOC theme. The UI is evidence-first and topology-centric.
+```bash
+sudo bash scripts/install_ubuntu.sh
+```
 
-### Safety and trust model
-
-- Current-session-only live state. Historical state never silently appears as live.
-- Fail closed when capture, storage, API, or worker health is uncertain.
-- Remote host actions are only for explicitly enrolled/authorized lab systems.
-- All response actions are auditable and permission-gated.
-- Detections are evidence-backed indicators; the platform does not manufacture certainty.
-
-## Foundation v1
-
-This repository currently provides the product foundation:
-
-- typed event model and in-process event bus
-- supervised worker runtime with health states
-- Windows-aware network auto-discovery worker
-- external-tool registry for Npcap/dumpcap/TShark/Suricata/YARA
-- unified orchestrator
-- FastAPI status surface
-- monochrome operator console shell
-- Windows CI tests
-
-Future workers plug into the same contracts rather than becoming independent scripts.
+Open http://127.0.0.1:8765. Read [deployment instructions](docs/UBUNTU_DEPLOYMENT.md) before configuring sensor exports.
 
 ## Development
 
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e .[dev]
-python -m campus_ops
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.lock
+.venv/bin/python -m pip install --no-deps -e .
+.venv/bin/ruff check src tests
+.venv/bin/pytest -q
+CAMPUS_OPS_NO_BROWSER=1 .venv/bin/python -m campus_ops
 ```
 
-Open `http://127.0.0.1:8765`.
+## Architecture and scope
 
-## Planned worker families
+[Architecture](docs/ARCHITECTURE.md) · [Integration status](docs/TOOL_INTEGRATIONS.md) · [Risk register](docs/RISK_REGISTER.md)
 
-`capture` · `protocol` · `flow` · `asset` · `performance` · `topology` · `ids` · `behavior` · `malware` · `endpoint` · `response` · `incident` · `forensics` · `voice` · `storage` · `system-health`
+Installed binaries and registry entries are not proof of operational integration. Most tools in the planned ecosystem still need connectors. Historical evidence never silently becomes live evidence, and response control remains limited to explicitly enrolled endpoints.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from campus_ops.platform_paths import data_root
+
 import asyncio
 import hashlib
 import json
@@ -18,7 +20,7 @@ from campus_ops.models import Event, EventKind, Severity
 
 
 def _root() -> Path:
-    root = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "CampusCyberOperationsPlatform"
+    root = data_root()
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -274,12 +276,10 @@ def install_enterprise_cases(app: FastAPI) -> FastAPI:
         return app
     app.state.enterprise_cases_installed = True
     store = CaseStore()
-    syslog = PassiveSyslogReceiver(app)
+    syslog = app.state.orchestrator.syslog
     app.state.case_store = store
     app.state.passive_syslog = syslog
 
-    app.add_event_handler("startup", syslog.start)
-    app.add_event_handler("shutdown", syslog.stop)
 
     @app.get("/api/v1/system/syslog")
     async def syslog_status() -> dict[str, Any]:

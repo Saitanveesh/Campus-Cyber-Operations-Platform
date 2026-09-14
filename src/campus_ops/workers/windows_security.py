@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import subprocess
 from datetime import UTC, datetime
@@ -167,6 +168,13 @@ if ($defender -and $defender.AntivirusSignatureLastUpdated) {
         return cls.normalize(decoded)
 
     async def run(self) -> None:
+        if os.name != "nt":
+            self.last = {"available": False, "state": "NOT_APPLICABLE"}
+            self.state.update_metrics(windows_security=self.last)
+            self.health.state = WorkerState.HEALTHY
+            self.health.heartbeat("Windows security is not applicable on Ubuntu")
+            await self._stop.wait()
+            return
         while not self.stopping:
             current = await asyncio.to_thread(self._probe)
             self.last = current

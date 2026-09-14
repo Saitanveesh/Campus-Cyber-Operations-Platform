@@ -1,0 +1,44 @@
+name: ubuntu-ci
+on:
+  push:
+    branches: [monitor-v1, 'codex/ubuntu-*']
+  pull_request:
+    branches: [monitor-v1, main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pip freeze
+      - name: Lint
+        run: ruff check src tests
+      - name: Validate Ubuntu installer
+        run: bash -n scripts/install_ubuntu.sh
+      - name: Preserve existing UI
+        run: |
+          python - <<'PY'
+          import subprocess
+          paths = subprocess.check_output(
+              ["git", "diff", "--name-only", "12ef976c6c227d1939ad5fb59db53c64953763d8", "HEAD"],
+              text=True,
+          ).splitlines()
+          changed = [p for p in paths if p.startswith("src/") and (
+              p.endswith(("_ui.py", ".html", ".css", ".js")) or "/ui/" in p)]
+          assert not changed, f"UI changes are outside the authorized scope: {changed}"
+          PY
+      - name: Tests
+        run: pytest -q

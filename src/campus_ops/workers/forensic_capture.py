@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 
+from campus_ops.platform_paths import data_root
 from campus_ops.event_bus import EventBus
 from campus_ops.models import WorkerState
 from campus_ops.tooling.registry import resolve_executable
@@ -11,12 +11,7 @@ from campus_ops.workers.base import BaseWorker
 
 
 def evidence_root() -> Path:
-    root = (
-        Path(os.environ.get("LOCALAPPDATA") or Path.home())
-        / "CampusCyberOperationsPlatform"
-        / "evidence"
-        / "pcap"
-    )
+    root = data_root() / "evidence" / "pcap"
     root.mkdir(parents=True, exist_ok=True)
     return root
 

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from campus_ops.platform_paths import data_root
+
 import asyncio
 import json
-import os
 import sqlite3
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from campus_ops.workers.base import BaseWorker
 
 
 def default_history_path() -> Path:
-    root = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "CampusCyberOperationsPlatform"
+    root = data_root()
     root.mkdir(parents=True, exist_ok=True)
     return root / "history.db"
 

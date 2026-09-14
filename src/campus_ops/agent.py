@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from campus_ops.platform_paths import data_root
+from campus_ops.linux_host import services as linux_services
+
 import argparse
 import hashlib
 import ipaddress
@@ -24,7 +27,7 @@ ISOLATION_GROUP = "CampusOps Isolation"
 
 
 def _agent_root() -> Path:
-    root = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "CampusCyberAgent"
+    root = data_root(agent=True)
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -61,7 +64,9 @@ def _network_addresses() -> list[dict[str, str]]:
 
 
 def _services() -> list[dict[str, str]]:
-    if os.name != "nt" or not hasattr(psutil, "win_service_iter"):
+    if os.name != "nt":
+        return linux_services()
+    if not hasattr(psutil, "win_service_iter"):
         return []
     result = []
     try:

@@ -17,12 +17,12 @@ def test_purple_model_maps_remote_services():
     assert "T1021.002" in techniques
     assert "T1021.004" in techniques
     assert "T1018" in techniques
-    assert model["coverage_score"] > 0
-    assert model["detection_gap_score"] < 100
+    assert model["coverage_score"] is None
+    assert model["detection_gap_score"] is None
 
 
 def test_purple_model_does_not_invent_techniques_without_evidence():
     model = _purple_team_model([], peer_count=1, signals=0, managed=False)
     assert model["techniques"][0]["technique"] == "BASELINE"
-    assert model["coverage_score"] == 0
-    assert model["detection_gap_score"] == 100
+    assert model["coverage_score"] is None
+    assert model["detection_gap_score"] is None

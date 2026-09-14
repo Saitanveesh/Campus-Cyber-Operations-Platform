@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from campus_ops.platform_paths import data_root
+
 import asyncio
 import json
-import os
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,7 +18,7 @@ from campus_ops.workers.base import BaseWorker
 
 
 def _root() -> Path:
-    root = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "CampusCyberOperationsPlatform"
+    root = data_root()
     root.mkdir(parents=True, exist_ok=True)
     return root
 

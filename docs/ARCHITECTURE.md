@@ -1,114 +1,78 @@
-# Architecture v1
+# Ubuntu operations architecture
 
-## Mission
+The operational console keeps its existing black-and-white interface. This increment adds backend ingestion, durable evidence and governed investigation. Presence checks and planned connectors are not working integrations.
 
-Campus Cyber Operations Platform is a Windows-native, evidence-first cyber operations system for authorized cyber-range and campus-lab environments. It is not a single packet monitor. It combines independent specialist workers under one supervisor and one live-state contract.
-
-## Control model
-
-```text
-Operator Console
-      |
-      v
-API / Command Gateway
-      |
-      v
-Orchestrator / Supervisor
-      |
-      +-- Session Manager
-      +-- Event Bus
-      +-- Tool Registry
-      +-- Worker Health
-      +-- Policy / Authorization
-      |
-      +-- Network Auto-Discovery Worker
-      +-- Capture Worker            -> Npcap / dumpcap
-      +-- Protocol Worker           -> TShark / native decoders
-      +-- Flow Worker
-      +-- Asset Worker
-      +-- Performance Worker
-      +-- Topology Worker
-      +-- IDS Worker                -> Suricata
-      +-- Behaviour Worker
-      +-- Malware Worker            -> YARA / IOC adapters
-      +-- Endpoint Worker           -> enrolled agents only
-      +-- Response Worker           -> permission gated
-      +-- Incident Correlator
-      +-- Evidence Worker
-      +-- Voice / Siren Worker
-      +-- Storage Worker
+```mermaid
+flowchart TD
+  Console["Operational console"] --> Telemetry["Telemetry fabric"]
+  Console --> Control["Control fabric"]
+  Telemetry --> Network["Network sensors"]
+  Telemetry --> Endpoint["Endpoint sensors"]
+  Telemetry --> Identity["Identity telemetry"]
+  Network --> Normalize["Normalization"]
+  Endpoint --> Normalize
+  Identity --> Normalize
+  Normalize --> Data["Data fabric"]
+  Data --> Detection["Detection"]
+  Data --> Behavior["Behavior"]
+  Data --> Baseline["Baseline"]
+  Detection --> Correlation["Correlation"]
+  Behavior --> Correlation
+  Baseline --> Correlation
+  Correlation --> Graph["Evidence graph"]
+  Graph --> Risk["Risk and confidence"]
+  Risk --> Gate["Autonomy policy gate"]
+  Gate --> Observe["Observe"]
+  Gate --> Investigate["Investigate"]
+  Gate --> Contain["Contain"]
+  Contain --> Control
+  Control --> Capture["Forensic capture"]
+  Investigate --> Capture
+  Capture --> Validate["Validation"]
+  Validate --> Tune["Detection tuning"]
+  Tune --> Detection
 ```
 
-## Why multiple workers
+| Layer | Implemented behavior | Remaining work |
+|---|---|---|
+| Telemetry | Zeek JSON and Suricata EVE; five additional local export adapters; existing syslog/agent workers | Remote authenticated sensor transport and real deployment qualification |
+| Normalization | Subject, original timestamp, severity, rule, source lineage, bounded attributes and content identity | Complete cross-sensor entity/identity resolution |
+| Data | SQLite WAL with evidence/session indexes, retention and decision journal | Campus-scale load testing and external storage |
+| Detection/behavior/baseline | Existing workers retained; sensor alerts stay distinct from ordinary observations | Sigma execution and measured detector coverage |
+| Correlation/graph | Current-session subject/evidence/origin graph; origin grouping | Neo4j connector and richer identity graph |
+| Risk | Explainable bounded severity score and separate confidence heuristic | Calibration using labeled incidents |
+| Policy/control | Observe by default; optional snapshot collection for unambiguous online enrolled agents | Validated Linux isolation, control-channel preservation, rollback |
+| Forensics | Existing snapshot jobs and bounded dumpcap capture/evidence export | Validated deployment permissions and acquisition guarantees |
+| Validation/tuning | Explicit expected subject/origin/rule window matching | Causal exercise validation; approved rule promotion |
 
-Each worker owns one responsibility and exchanges typed events. External tools are adapters, not the application architecture. If one tool is unavailable, the supervisor reports a degraded capability instead of fabricating data.
+## Evidence invariants
 
-Examples:
+- Startup history, previous sessions and records over five minutes old do not enter current decisions. More than 30 seconds of future skew is rejected.
+- Partial JSON lines are deferred; oversized lines are discarded; inode changes and truncation restart reading safely.
+- Content deduplication survives restart. Repeated alerts from one source do not create independent corroboration.
+- Wazuh exports identifying forwarded Suricata/Zeek/Falco alerts keep the underlying origin.
+- Tetragon process events and Hubble flow observations do not become alerts merely by existing.
+- Derived platform alerts do not count as independent native sensor evidence. Unknown source time prevents automatic investigation.
+- Scores are heuristics, not calibrated probabilities.
+- Automatic containment remains disabled, including when a legacy environment flag requests it.
 
-- dumpcap/Npcap: privileged packet acquisition
-- TShark: deep protocol decoding
-- Suricata: mature signature/IDS telemetry
-- YARA: file-content rules where a file is legitimately extracted
-- native workers: session truth, correlation, topology, baselines, evidence, UI contracts
+## Autonomy
 
-## Live-state contract
+`CAMPUS_OPS_AUTONOMY_MODE=observe` records recommendations only.
+`investigate` permits `COLLECT_SNAPSHOT` when fresh, timed alerts meet the configured threshold, pipeline checks pass and the subject maps to exactly one online enrolled endpoint. The durable reservation limits jobs to one per endpoint/session/five-minute bucket. Adjacent buckets may produce jobs less than five minutes apart. Reservation and the existing agent queue are separate transactions; a crash can miss a collection and is not an exactly-once guarantee.
 
-1. Exactly one active live session exists at a time.
-2. A network identity change closes the old session before a new one opens.
-3. Live API responses include the current session id.
-4. Historical records are never used as fallback values for live fields.
-5. Worker failure produces `DEGRADED` or `FAILED`, never frozen stale values presented as healthy.
-6. Every observation carries source worker, timestamp, session id, and evidence class.
+Configurable thresholds are in `config/risk-policy.json`; load them with `CAMPUS_OPS_RISK_POLICY`. Invalid modes/policies fail at startup. Telemetry errors or bus drops block new automatic jobs until addressed and the process restarted.
 
-## Network auto-discovery
+## Backend APIs
 
-The platform elects a capture interface from host-local evidence:
+| Route | Purpose |
+|---|---|
+| GET /api/v1/system/operations-fabric | Runtime, feed counters, policy and recommendations |
+| GET /api/v1/system/autonomy | Existing route delegates to the evidence-backed runtime |
+| GET /api/v1/system/evidence-graph | Admin-authenticated current-session evidence graph |
+| POST /api/v1/admin/validation-runs | Admin-authenticated expected subject, origin, rule and time window |
+| GET /api/v1/admin/validation-runs/{run_id} | Temporal match state and supporting evidence IDs |
 
-- adapter operational state
-- usable unicast IPv4/IPv6
-- default route ownership
-- route metric
-- loopback/virtual/tunnel classification
-- traffic counters
-- known capture backend visibility
-- hysteresis to prevent interface flapping
+Validation does not execute attacks or measure ATT&CK coverage. Run handles are in memory (up to 100); starts are journaled locally. No rule is automatically promoted.
 
-Manual interface pinning will be supported, but automatic election is the default.
-
-## Visibility levels
-
-The UI must always disclose what evidence is actually available.
-
-- Access-port mode: host traffic plus broadcasts/multicasts visible to the endpoint
-- SPAN/TAP mode: mirrored packet visibility for the configured scope
-- Flow mode: NetFlow/IPFIX/sFlow summaries
-- Infrastructure mode: SNMP/LLDP/syslog/network-controller telemetry
-- Endpoint mode: enrolled-agent host evidence
-
-The system never labels access-port observations as full campus visibility.
-
-## Endpoint control
-
-Remote access and response are separate from passive visibility. Only explicitly enrolled or lab-authorized systems may accept control actions. Actions are authenticated, authorization-gated, logged, and tied to an operator identity and incident context.
-
-## UI direction
-
-Monochrome only: black, white, grey, borders, typography, motion and density convey state. The topology is an operational graph, not decoration.
-
-Planned views:
-
-- Overview
-- Physical / Logical / Communication / Security Topology
-- Assets
-- Traffic / Protocols / TCP / DNS
-- Performance
-- Security / Malware
-- Incidents
-- Endpoint Control
-- Packets / Evidence
-- History
-- System Health
-
-## Build strategy
-
-Foundation -> capture/session -> protocols/flows -> assets/performance -> topology -> IDS/behaviour -> malware -> endpoint agent/control -> incidents -> evidence -> voice/siren -> cyber-range integration -> installer/hardening.
+See [tool status](TOOL_INTEGRATIONS.md), [Ubuntu deployment](UBUNTU_DEPLOYMENT.md) and [risk register](RISK_REGISTER.md).

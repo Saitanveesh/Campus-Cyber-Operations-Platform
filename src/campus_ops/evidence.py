@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from campus_ops.platform_paths import data_root
+
 import hashlib
 import json
-import os
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,7 +13,7 @@ from campus_ops.state import LiveState
 
 
 def _platform_root() -> Path:
-    root = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "CampusCyberOperationsPlatform"
+    root = data_root()
     root.mkdir(parents=True, exist_ok=True)
     return root
 

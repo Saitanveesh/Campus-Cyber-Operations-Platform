@@ -420,8 +420,6 @@ def install_enterprise_layer(app: FastAPI) -> FastAPI:
     app.state.enterprise_tool_broker = tools
 
     app.add_event_handler("startup", fusion.start)
-    app.add_event_handler("startup", zeek.start)
-    app.add_event_handler("shutdown", zeek.stop)
     app.add_event_handler("shutdown", fusion.stop)
 
     @app.get("/api/v1/system/interface-decision")
@@ -443,7 +441,7 @@ def install_enterprise_layer(app: FastAPI) -> FastAPI:
 
     @app.get("/api/v1/system/zeek")
     async def zeek_status() -> dict[str, Any]:
-        return zeek.snapshot()
+        return getattr(app.state.orchestrator, "zeek", zeek).snapshot()
 
     @app.get("/api/v1/admin/enterprise/{target}")
     async def enterprise_target(
@@ -462,7 +460,7 @@ def install_enterprise_layer(app: FastAPI) -> FastAPI:
         _require_admin(app, request, x_campus_admin)
         return {
             "fusion": fusion.snapshot(),
-            "zeek": zeek.snapshot(),
+            "zeek": getattr(app.state.orchestrator, "zeek", zeek).snapshot(),
             "tools": tools.scan(),
             "interface": InterfaceDecision.snapshot(app),
         }

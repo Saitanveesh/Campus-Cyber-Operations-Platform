@@ -27,6 +27,8 @@ def _which(command: str) -> str | None:
 
 
 def _wsl_which(command: str) -> str | None:
+    if os.name != "nt":
+        return None
     wsl = shutil.which("wsl.exe") or shutil.which("wsl")
     if not wsl:
         return None
@@ -146,6 +148,8 @@ def telemetry_fabric_status() -> dict[str, Any]:
             plane["ready"] += 1
 
     return {
+        "readiness_semantics": "READY means executable presence, not verified ingestion",
+        "sensor_execution_verified": False,
         "state": "READY" if core_ready == len(core) and ready >= 8 else ("PARTIAL" if ready else "BASELINE_ONLY"),
         "ready_tools": ready,
         "total_tools": len(tools),

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from campus_ops.platform_paths import data_root
+
 import hashlib
 import json
-import os
 import secrets
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -12,7 +13,7 @@ from uuid import uuid4
 
 
 def _root() -> Path:
-    root = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "CampusCyberOperationsPlatform"
+    root = data_root()
     root.mkdir(parents=True, exist_ok=True)
     return root
 

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from campus_ops.platform_paths import data_root
+
 import ipaddress
 import json
-import os
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -13,7 +14,7 @@ HASH_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 def _root() -> Path:
-    root = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "CampusCyberOperationsPlatform"
+    root = data_root()
     root.mkdir(parents=True, exist_ok=True)
     return root
 

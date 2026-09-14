@@ -250,7 +250,8 @@ def sigma_status() -> dict[str, Any]:
         "rule_dir_available": bool(path and path.exists()),
         "rule_count": rule_count,
         "state": "READY" if cli and path and path.exists() else "NOT_CONFIGURED",
-        "execution_policy": "DETECTION_TRANSLATION_ONLY",
+        "execution_policy": "NOT_EXECUTED",
+        "execution_verified": False,
     }
 
 

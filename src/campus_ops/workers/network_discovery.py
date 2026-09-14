@@ -9,6 +9,7 @@ from dataclasses import asdict
 
 import psutil
 
+from campus_ops.linux_host import default_routes as linux_routes
 from campus_ops.models import Event, EventKind, NetworkCandidate, SelectedNetwork, WorkerState
 from campus_ops.workers.base import BaseWorker
 
@@ -24,6 +25,9 @@ VIRTUAL_HINTS = (
     "vpn",
     "docker",
     "wsl",
+    "veth",
+    "cilium",
+    "flannel",
 )
 
 
@@ -31,9 +35,9 @@ def classify_interface(name: str) -> str:
     lowered = name.lower()
     if any(token in lowered for token in VIRTUAL_HINTS):
         return "virtual"
-    if "wi-fi" in lowered or "wifi" in lowered or "wireless" in lowered or "wlan" in lowered:
+    if lowered.startswith(("wlp", "wlx")) or "wi-fi" in lowered or "wifi" in lowered or "wireless" in lowered or "wlan" in lowered:
         return "wireless"
-    if "ethernet" in lowered or lowered.startswith("eth"):
+    if "ethernet" in lowered or lowered.startswith(("eth", "enp", "ens", "eno", "enx")):
         return "ethernet"
     return "other"
 
@@ -140,7 +144,7 @@ def discover_candidates() -> list[NetworkCandidate]:
     addresses = psutil.net_if_addrs()
     stats = psutil.net_if_stats()
     counters = psutil.net_io_counters(pernic=True)
-    routes = _windows_routes()
+    routes = _windows_routes() if os.name == "nt" else linux_routes()
     candidates: list[NetworkCandidate] = []
     for name, addr_list in addresses.items():
         ipv4: list[str] = []

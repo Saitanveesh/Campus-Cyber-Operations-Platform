@@ -25,6 +25,7 @@ from campus_ops.enterprise_layer import install_enterprise_layer
 from campus_ops.enterprise_operations import install_enterprise_operations
 from campus_ops.enterprise_soc import install_enterprise_soc
 from campus_ops.enterprise_telemetry import install_enterprise_telemetry
+from campus_ops.fabric.runtime import install_operations_fabric
 from campus_ops.link_state import install_link_state
 from campus_ops.network_depth_layer import install_network_depth_layer
 from campus_ops.operational_readiness import install_operational_readiness
@@ -75,6 +76,7 @@ def build_app():
     app = install_operator_refinement(app)
     app = install_enterprise_telemetry(app)
     app = install_zeek_integration(app)
+    app = install_operations_fabric(app)
     app = install_authorized_discovery(app)
     app = install_autonomy_engine(app)
     app = install_operational_readiness(app)

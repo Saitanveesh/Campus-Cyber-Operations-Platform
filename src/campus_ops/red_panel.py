@@ -103,7 +103,6 @@ def _purple_team_model(
         else:
             coverage = 32
             detection = "NETWORK_TELEMETRY_ONLY"
-        gap = "LOW" if coverage >= 75 else "MEDIUM" if coverage >= 50 else "HIGH"
         rows.append(
             {
                 "technique": technique,
@@ -111,8 +110,10 @@ def _purple_team_model(
                 "evidence": evidence,
                 "telemetry": telemetry,
                 "detection_state": detection,
-                "coverage": coverage,
-                "gap": gap,
+                "coverage": None,
+                "readiness_heuristic": coverage,
+                "validation_state": "NOT_MEASURED",
+                "gap": "UNASSESSED",
                 "control_state": "ENDPOINT_AND_NETWORK" if managed else "NETWORK_ONLY",
             }
         )
@@ -138,15 +139,16 @@ def _purple_team_model(
                 "evidence": "Current telemetry does not support a specific technique mapping.",
                 "telemetry": "current session",
                 "detection_state": "NO_CANDIDATE",
-                "coverage": 0,
+                "coverage": None,
+                "readiness_heuristic": 0,
+                "validation_state": "NOT_MEASURED",
                 "gap": "UNASSESSED",
                 "control_state": "UNASSESSED",
             }
         )
 
-    scored = [row["coverage"] for row in rows if row["technique"] != "BASELINE"]
+    scored = [row["readiness_heuristic"] for row in rows if row["technique"] != "BASELINE"]
     coverage_score = round(sum(scored) / len(scored)) if scored else 0
-    gap_score = 100 - coverage_score if scored else 100
     exercises = [
         "Validate that authorized remote-service activity produces expected network and endpoint telemetry.",
         "Confirm east-west segmentation policy for the target and its highest-frequency peers.",
@@ -157,8 +159,10 @@ def _purple_team_model(
         exercises.append("Validate isolate and restore workflow with explicit operator confirmation in the lab.")
 
     return {
-        "coverage_score": coverage_score,
-        "detection_gap_score": gap_score,
+        "coverage_score": None,
+        "readiness_heuristic": coverage_score,
+        "validation_state": "NOT_MEASURED",
+        "detection_gap_score": None,
         "techniques": rows,
         "exercise_queue": exercises,
         "truth_note": "Technique rows are evidence-backed validation candidates, not proof that the technique was executed maliciously.",

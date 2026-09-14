@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from pathlib import Path
 from typing import Any
 
+from campus_ops.fabric.records import fresh, timestamp
+from campus_ops.fabric.tail import JsonTail
 from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, Severity, WorkerState
 from campus_ops.workers.base import BaseWorker
@@ -20,6 +21,9 @@ def default_zeek_log_dirs() -> list[Path]:
         [
             Path(r"C:\ProgramData\Zeek\logs\current"),
             Path(r"C:\Program Files\Zeek\logs\current"),
+            Path("/opt/zeek/logs/current"),
+            Path("/var/log/zeek/current"),
+            Path("/usr/local/zeek/logs/current"),
             Path.home() / "zeek" / "logs" / "current",
         ]
     )
@@ -29,7 +33,7 @@ def default_zeek_log_dirs() -> list[Path]:
 def _first_value(record: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         value = record.get(key)
-        if value not in {None, ""}:
+        if value is not None and value != "":
             return value
     return None
 
@@ -43,7 +47,9 @@ class ZeekFeedWorker(BaseWorker):
         super().__init__("zeek-feed", bus)
         self.session_provider = session_provider
         self.log_dirs = log_dirs or default_zeek_log_dirs()
-        self._offsets: dict[Path, int] = {}
+        self._tails: dict[Path, JsonTail] = {}
+        self.records = 0
+        self.errors = 0
 
     def _active_dir(self) -> Path | None:
         return next((path for path in self.log_dirs if path.exists() and path.is_dir()), None)
@@ -52,6 +58,8 @@ class ZeekFeedWorker(BaseWorker):
     def _event_for(path: Path, record: dict[str, Any], session_id: str) -> Event | None:
         name = path.name.lower()
         common = {
+            "observed_at": timestamp(record.get("ts")),
+            "rule": str(record.get("note") or name),
             "src_ip": _first_value(record, "id.orig_h", "src_ip"),
             "src_port": _first_value(record, "id.orig_p", "src_port"),
             "dst_ip": _first_value(record, "id.resp_h", "dst_ip"),
@@ -135,6 +143,8 @@ class ZeekFeedWorker(BaseWorker):
                     "type": "SECURITY_INDICATOR",
                     "title": message,
                     "confidence": 70,
+                    "observed_at": timestamp(record.get("ts")),
+                    "rule": str(record.get("note") or name),
                     "evidence": {
                         **common,
                         "note": record.get("note"),
@@ -145,36 +155,25 @@ class ZeekFeedWorker(BaseWorker):
             )
         return None
 
-    async def _consume_file(self, path: Path, session_id: str) -> int:
-        if path not in self._offsets:
-            self._offsets[path] = path.stat().st_size
-            return 0
-        size = path.stat().st_size
-        offset = self._offsets[path]
-        if size < offset:
-            offset = 0
+    def snapshot(self) -> dict[str, Any]:
+        active = self._active_dir()
+        return {"configured": bool(self.log_dirs), "available": bool(active),
+                "log_dir": str(active) if active else None, "records": self.records,
+                "errors": self.errors, "state": str(self.health.state)}
+
+    async def _consume_file(self, path: Path, session_id: str | None) -> int:
+        tail = self._tails.setdefault(path, JsonTail(path))
+        before = tail.errors
         emitted = 0
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
-            handle.seek(offset)
-            while True:
-                line = handle.readline()
-                if not line:
-                    break
-                self._offsets[path] = handle.tell()
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(record, dict):
-                    continue
-                event = self._event_for(path, record, session_id)
-                if event is not None:
-                    await self.bus.publish(event)
-                    emitted += 1
-            self._offsets[path] = handle.tell()
+        for record in tail.read(session_id):
+            if not session_id or not fresh(timestamp(record.get("ts"))):
+                continue
+            event = self._event_for(path, record, session_id)
+            if event is not None:
+                await self.bus.publish(event)
+                emitted += 1
+        self.errors += tail.errors - before
+        self.records += emitted
         return emitted
 
     async def run(self) -> None:
@@ -187,6 +186,11 @@ class ZeekFeedWorker(BaseWorker):
                 continue
             session_id = self.session_provider()
             if not session_id:
+                for path in [active / name for name in self.LOGS if (active / name).is_file()]:
+                    try:
+                        await self._consume_file(path, None)
+                    except OSError:
+                        self.errors += 1
                 self.health.state = WorkerState.HEALTHY
                 self.health.heartbeat("Zeek available; waiting for live session")
                 await asyncio.sleep(2)
@@ -202,7 +206,8 @@ class ZeekFeedWorker(BaseWorker):
                 try:
                     emitted += await self._consume_file(path, session_id)
                 except OSError as exc:
+                    self.errors += 1
                     self.health.last_error = str(exc)
-            self.health.state = WorkerState.HEALTHY
+            self.health.state = WorkerState.DEGRADED if self.errors else WorkerState.HEALTHY
             self.health.heartbeat(f"Zeek JSON feed active; {emitted} new record(s)")
             await asyncio.sleep(1)

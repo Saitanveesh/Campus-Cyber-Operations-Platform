@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from campus_ops.platform_paths import data_root
+
 import asyncio
 import json
 import os
@@ -23,7 +25,7 @@ class EnrolledEndpoint:
 
 
 def default_registry_path() -> Path:
-    root = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "CampusCyberOperationsPlatform"
+    root = data_root()
     root.mkdir(parents=True, exist_ok=True)
     return root / "endpoints.json"
 

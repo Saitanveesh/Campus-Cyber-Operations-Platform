@@ -42,6 +42,9 @@ def build_autonomy_state(app: FastAPI) -> dict[str, Any]:
     This engine deliberately separates detection confidence from disruptive action.
     It never treats a single heuristic or open port as sufficient authority to isolate a host.
     """
+    fabric = getattr(app.state, "operations_fabric", None)
+    if fabric is not None:
+        return fabric.snapshot()
     snapshot = app.state.orchestrator.snapshot()
     live = _live(snapshot)
     managed = _managed_ips(snapshot)
