@@ -56,8 +56,8 @@ class JsonTail:
                 try:
                     row = json.loads(line)
                     if not isinstance(row, dict):
-                        raise ValueError("JSON object required")
+                        raise TypeError("JSON object required")
                     rows.append(row)
-                except (ValueError, UnicodeError):
+                except (ValueError, UnicodeError, TypeError):
                     self.errors += 1
             return rows

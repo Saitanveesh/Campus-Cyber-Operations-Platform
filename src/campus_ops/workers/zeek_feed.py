@@ -5,9 +5,9 @@ import os
 from pathlib import Path
 from typing import Any
 
+from campus_ops.event_bus import EventBus
 from campus_ops.fabric.records import fresh, timestamp
 from campus_ops.fabric.tail import JsonTail
-from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, Severity, WorkerState
 from campus_ops.workers.base import BaseWorker
 

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from campus_ops.platform_paths import data_root
-
 import asyncio
 import json
 import sqlite3
@@ -9,6 +7,7 @@ from pathlib import Path
 
 from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, WorkerState
+from campus_ops.platform_paths import data_root
 from campus_ops.workers.base import BaseWorker
 
 

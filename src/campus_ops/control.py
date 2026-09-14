@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from campus_ops.platform_paths import data_root
-
 import asyncio
 import json
 import os
@@ -11,6 +9,7 @@ from typing import Literal
 
 from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, Severity
+from campus_ops.platform_paths import data_root
 
 
 @dataclass(frozen=True, slots=True)

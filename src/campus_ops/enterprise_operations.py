@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from campus_ops.platform_paths import data_root
-
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -14,6 +12,7 @@ from pydantic import BaseModel, Field
 from campus_ops.admin_deep import _require_admin
 from campus_ops.enterprise_detection import command_center
 from campus_ops.enterprise_forensics import evidence_manifest
+from campus_ops.platform_paths import data_root
 from campus_ops.policy import Role
 
 

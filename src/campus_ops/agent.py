@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from campus_ops.platform_paths import data_root
-from campus_ops.linux_host import services as linux_services
-
 import argparse
 import hashlib
 import ipaddress
@@ -21,6 +18,10 @@ from pathlib import Path
 from typing import Any
 
 import psutil
+
+from campus_ops.linux_host import services as linux_services
+from campus_ops.platform_paths import data_root
+
 
 AGENT_VERSION = "0.3.0"
 ISOLATION_GROUP = "CampusOps Isolation"

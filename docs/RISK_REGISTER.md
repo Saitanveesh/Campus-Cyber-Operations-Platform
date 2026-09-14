@@ -17,4 +17,4 @@
 | R13 | Existing local administration is not remote hardened | Keep loopback console; current admin authentication retained |
 | R14 | Export tailing skips content present at first attachment/session change | Prevent stale live data; use source sensor archives for historical investigations |
 | R15 | Error/drop gate is conservative and cumulative | Fix feed/queue errors and restart before automatic collection resumes |
-| R16 | Package resolution can change | Freeze and validate the reconstructed dependency set in Ubuntu CI |
+| R16 | Package resolution can change | Pinned requirements.lock from recovery CI; both supported Python versions revalidate it |

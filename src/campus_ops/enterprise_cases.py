@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from campus_ops.platform_paths import data_root
-
 import asyncio
 import hashlib
 import json
@@ -17,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from campus_ops.admin_deep import _require_admin
 from campus_ops.models import Event, EventKind, Severity
+from campus_ops.platform_paths import data_root
 
 
 def _root() -> Path:

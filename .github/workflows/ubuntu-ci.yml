@@ -22,8 +22,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: |
-          python -m pip install -e '.[dev]'
-          python -m pip freeze
+          python -m pip install -r requirements.lock
+          python -m pip install --no-deps -e .
+          python -m pip check
       - name: Lint
         run: ruff check src tests
       - name: Validate Ubuntu installer

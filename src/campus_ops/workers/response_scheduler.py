@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from campus_ops.platform_paths import data_root
-
 import asyncio
 import json
 from dataclasses import asdict, dataclass, field
@@ -12,6 +10,7 @@ from uuid import uuid4
 
 from campus_ops.event_bus import EventBus
 from campus_ops.models import WorkerState
+from campus_ops.platform_paths import data_root
 from campus_ops.policy import Role
 from campus_ops.response import ResponseEngine
 from campus_ops.workers.base import BaseWorker

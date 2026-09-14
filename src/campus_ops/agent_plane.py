@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from campus_ops.platform_paths import data_root
-
 import hashlib
 import json
 import secrets
@@ -10,6 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+from campus_ops.platform_paths import data_root
 
 
 def _root() -> Path:

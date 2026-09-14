@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from campus_ops.platform_paths import data_root
-
 import ipaddress
 import json
 import re
@@ -9,6 +7,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
+
+from campus_ops.platform_paths import data_root
+
 
 HASH_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 

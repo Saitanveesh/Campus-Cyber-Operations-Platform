@@ -228,7 +228,7 @@ async def test_export_bus_evidence_and_real_snapshot_queue(tmp_path, monkeypatch
 async def test_runtime_start_stop_and_failed_pipeline_blocks_jobs(tmp_path, monkeypatch):
     monkeypatch.setenv("CAMPUS_OPS_AUTONOMY_MODE", "investigate")
     orch = SimpleNamespace(bus=EventBus(queue_size=1), session_id="session",
-                           agents=SimpleNamespace(list=lambda: []))
+                           agents=SimpleNamespace(list=list))
     fabric = OperationsFabric(orch, tmp_path / "fabric.db")
     await fabric.start()
     await asyncio.sleep(0)
@@ -245,7 +245,7 @@ async def test_runtime_start_stop_and_failed_pipeline_blocks_jobs(tmp_path, monk
 
 def test_validation_matches_only_exact_current_session_alert(tmp_path):
     orch = SimpleNamespace(bus=EventBus(), session_id="session",
-                           agents=SimpleNamespace(list=lambda: []))
+                           agents=SimpleNamespace(list=list))
     fabric = OperationsFabric(orch, tmp_path / "fabric.db")
     run = fabric.start_validation(ValidationRequest(subject="endpoint", origin="falco",
                                                     rule="Unexpected shell"))

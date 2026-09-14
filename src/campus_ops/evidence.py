@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from campus_ops.platform_paths import data_root
-
 import hashlib
 import json
 import zipfile
@@ -9,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from campus_ops.platform_paths import data_root
 from campus_ops.state import LiveState
 
 
