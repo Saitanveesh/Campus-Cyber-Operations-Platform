@@ -280,5 +280,10 @@ def test_one_zeek_and_syslog_owner_and_admin_routes(tmp_path, monkeypatch):
     assert client.post("/api/v1/admin/validation-runs", json={
         "subject": "endpoint", "origin": "falco", "rule": "test"
     }).status_code == 401
-    assert client.get("/api/v1/system/operations-fabric").json()["automatic_containment_enabled"] is False
+    state = client.get("/api/v1/system/autonomy").json()
+    assert state["automatic_containment_enabled"] is False
+    # Keep the policy fields consumed by the frozen autonomy panel.
+    assert state["policy"]["isolation_threshold"] == 85
+    assert state["policy"]["minimum_independent_sources"] == 2
+    assert state["policy"]["minimum_high_confidence_events"] == 0
     app.state.operations_fabric.store.close()

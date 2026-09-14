@@ -97,7 +97,17 @@ class OperationsFabric(BaseWorker):
         return {
             "state": str(self.health.state), "mode": self.mode.upper(),
             "session_id": self.orch.session_id, "automatic_containment_enabled": False,
-            "decision_count": len(rows), "decisions": rows, "policy": asdict(self.policy),
+            "decision_count": len(rows), "decisions": rows,
+            "policy": {
+                **asdict(self.policy),
+                "isolation_threshold": self.policy.contain_threshold,
+                "minimum_independent_sources": self.policy.minimum_origins,
+                # The new model evaluates confidence across origins, not event counts.
+                "minimum_high_confidence_events": 0,
+                "managed_endpoint_required": True,
+                "automatic_rule_promotion": False,
+                "rollback_required": True,
+            },
             "exports": {tool: {"configured": True, **m} for tool, m in self.metrics.items()},
             "pipeline_healthy": self.pipeline_healthy(), "errors": self.errors,
             "host": host_status(), "storage": "SQLITE", "confidence_is_probability": False,
