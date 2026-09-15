@@ -254,15 +254,18 @@ class NetworkDiscoveryWorker(BaseWorker):
         interval: float = 3.0,
         switch_margin: int = 15,
         confirmations: int = 2,
+        unavailable_confirmations: int = 3,
     ) -> None:
         super().__init__("network-discovery", bus)
         self.interval = interval
         self.switch_margin = switch_margin
         self.confirmations = max(1, confirmations)
+        self.unavailable_confirmations = max(1, unavailable_confirmations)
         self.selected: SelectedNetwork | None = None
         self.candidates: list[NetworkCandidate] = []
         self._pending_name: str | None = None
         self._pending_count = 0
+        self._loss_count = 0
 
     async def run(self) -> None:
         while not self.stopping:
@@ -271,7 +274,13 @@ class NetworkDiscoveryWorker(BaseWorker):
             await self._consider(proposed)
             if self.selected:
                 self.health.state = WorkerState.HEALTHY
-                self.health.heartbeat(f"selected {self.selected.interface}")
+                if self._loss_count:
+                    self.health.heartbeat(
+                        f"holding {self.selected.interface} through transient link observation "
+                        f"{self._loss_count}/{self.unavailable_confirmations}"
+                    )
+                else:
+                    self.health.heartbeat(f"selected {self.selected.interface}")
             else:
                 self.health.state = WorkerState.DEGRADED
                 self.health.heartbeat("no viable monitoring interface")
@@ -280,40 +289,56 @@ class NetworkDiscoveryWorker(BaseWorker):
             except TimeoutError:
                 pass
 
+    async def _declare_unavailable(self) -> None:
+        if self.selected is None:
+            return
+        old = self.selected
+        self.selected = None
+        self._pending_name = None
+        self._pending_count = 0
+        self._loss_count = 0
+        await self.bus.publish(
+            Event(
+                source=self.name,
+                kind=EventKind.NETWORK,
+                payload={"change": "NETWORK_UNAVAILABLE", "previous": asdict(old)},
+            )
+        )
+
     async def _consider(self, proposed: SelectedNetwork | None) -> None:
         if proposed is None:
             self._pending_name = None
             self._pending_count = 0
-            if self.selected is not None:
-                old = self.selected
-                self.selected = None
-                await self.bus.publish(
-                    Event(
-                        source=self.name,
-                        kind=EventKind.NETWORK,
-                        payload={"change": "NETWORK_UNAVAILABLE", "previous": asdict(old)},
-                    )
-                )
+            if self.selected is None:
+                self._loss_count = 0
+                return
+            self._loss_count += 1
+            if self._loss_count < self.unavailable_confirmations:
+                return
+            await self._declare_unavailable()
             return
+
         if self.selected is not None and self.candidates:
             current = next((c for c in self.candidates if c.name == self.selected.interface), None)
             if self.selected.interface != "any" and (current is None or not current.is_up):
-                old = self.selected
-                self.selected = None
-                self._pending_name = None
-                self._pending_count = 0
-                await self.bus.publish(Event(source=self.name, kind=EventKind.NETWORK,
-                    payload={"change": "NETWORK_UNAVAILABLE", "previous": asdict(old)}))
+                self._loss_count += 1
+                if self._loss_count < self.unavailable_confirmations:
+                    return
+                await self._declare_unavailable()
             elif current is not None:
+                self._loss_count = 0
                 # Compare against current link/route state, never yesterday's high score.
                 current_score, current_reasons = score_candidate(current)
                 self.selected = SelectedNetwork(current.name, current_score, current_reasons,
                     self.selected.ipv4, self.selected.ipv6, self.selected.prefixes,
                     self.selected.default_route, self.selected.route_metric, self.selected.gateway)
+
         if self.selected is None:
             await self._confirm_and_switch(proposed)
             return
+
         if proposed.interface == self.selected.interface:
+            self._loss_count = 0
             changed_identity = (
                 proposed.ipv4 != self.selected.ipv4
                 or proposed.ipv6 != self.selected.ipv6
@@ -337,6 +362,7 @@ class NetworkDiscoveryWorker(BaseWorker):
                     )
                 )
             return
+
         forced = "explicit-interface" in proposed.reasons or proposed.interface == "any"
         if not forced and proposed.score < self.selected.score + self.switch_margin:
             self._pending_name = None
@@ -345,6 +371,7 @@ class NetworkDiscoveryWorker(BaseWorker):
         await self._confirm_and_switch(proposed)
 
     async def _confirm_and_switch(self, proposed: SelectedNetwork) -> None:
+        self._loss_count = 0
         if self._pending_name == proposed.interface:
             self._pending_count += 1
         else:
