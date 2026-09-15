@@ -33,6 +33,21 @@ def test_bootstrap_forces_real_interface_election():
     assert "repair_capture_permissions.sh" in script
 
 
+def test_linux_capture_does_not_ask_tshark_for_raw_capture():
+    capture = Path("src/campus_ops/workers/capture.py").read_text()
+    assert 'self._decoder_command(tshark, ["-r", "-"])' in capture
+    assert 'self._active_backend = f"{backend_name}+tshark"' in capture
+    assert 'rows.append(("dumpcap", dumpcap))' in capture
+    assert 'rows.append(("tcpdump", tcpdump))' in capture
+
+
+def test_capture_repair_verifies_real_service_identity_and_packet_open():
+    repair = Path("scripts/repair_capture_permissions.sh").read_text()
+    assert 'runuser -u "$capture_user" -- "$dumpcap_path"' in repair
+    assert 'duration:1' in repair
+    assert 'setcap cap_net_raw,cap_net_admin=eip "$tcpdump_path"' in repair
+
+
 def test_default_documentation_does_not_recommend_any_capture():
     readme = Path("README.md").read_text()
     assert "sudo bash scripts/install_ubuntu.sh --interface auto" in readme
