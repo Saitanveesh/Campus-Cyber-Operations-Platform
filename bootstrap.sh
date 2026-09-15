@@ -34,8 +34,13 @@ fi
 info "Updating $BRANCH from GitHub."
 git pull --ff-only origin "$BRANCH"
 
+invoking_user="${SUDO_USER:-${USER:-}}"
 info "Installing/repairing prerequisites and forcing automatic active-interface selection."
 sudo bash "$installer" --interface auto
+
+info "Repairing and verifying packet-capture privileges for the service account."
+sudo bash scripts/repair_capture_permissions.sh --user "$invoking_user"
+sudo systemctl restart campus-ops.service
 
 info "Running post-install health check."
 if sudo /opt/campus-ops/venv/bin/python -m campus_ops.deployment_check; then
@@ -55,11 +60,6 @@ fi
 
 info "Console: $CONSOLE_URL"
 # Open only in the invoking desktop session; the system service itself remains headless.
-if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]]; then
-    desktop_user="$SUDO_USER"
-else
-    desktop_user="${USER:-}"
-fi
 if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v xdg-open >/dev/null 2>&1; then
     (xdg-open "$CONSOLE_URL" >/dev/null 2>&1 &) || true
 fi
