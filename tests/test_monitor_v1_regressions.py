@@ -39,11 +39,13 @@ def test_runtime_does_not_mount_experimental_console_layers():
         assert forbidden not in main
 
 
-def test_stable_orchestrator_does_not_start_parallel_external_feeds():
+def test_stable_orchestrator_does_not_start_parallel_or_heuristic_capture_feeds():
     stable = Path("src/campus_ops/stable_orchestrator.py").read_text()
     assert "self.capture," in stable
     assert 'result["authoritative_packet_source"] = "tshark"' in stable
+    assert 'result["capture_state_policy"] = "process-health-only"' in stable
     for forbidden in (
+        "self.capture_health,",
         "self.suricata,",
         "self.forensic_capture,",
         "self.syslog,",
@@ -57,14 +59,17 @@ def test_stable_orchestrator_does_not_start_parallel_external_feeds():
         assert forbidden not in stable
 
 
-def test_capture_worker_has_one_managed_process_and_no_backend_failover():
+def test_capture_worker_has_one_managed_process_and_quiet_link_stays_active():
     capture = Path("src/campus_ops/workers/capture.py").read_text()
     assert 'backend="tshark"' in capture
-    assert '"-i", capture_device' in capture
+    assert '"-i",' in capture
     assert "tcpdump" not in capture
     assert "_linux_backends" not in capture
     assert "_spawn_linux_pipeline" not in capture
     assert "REBINDING" not in capture
+    assert "LINK_UP_IDLE" not in capture
+    assert 'traffic_activity="QUIET"' in capture
+    assert "capture remains ACTIVE" in capture
 
 
 def test_assets_require_repeated_local_source_frame_evidence():
@@ -146,6 +151,6 @@ def test_dependency_constraints_do_not_reintroduce_invalid_websockets_pin():
     assert "websockets==17.1" not in constraints
 
 
-def test_package_version_is_stable_0_4():
+def test_package_version_is_stable_0_4_1():
     project = Path("pyproject.toml").read_text()
-    assert 'version = "0.4.0"' in project
+    assert 'version = "0.4.1"' in project
