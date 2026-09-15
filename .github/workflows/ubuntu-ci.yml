@@ -5,14 +5,13 @@ on:
   pull_request:
     branches: [monitor-v1, main]
 
-# A direct monitor-v1 push and its PR update can otherwise create duplicate four-job
-# matrices. Use the head branch as the shared key and keep only the newest pipeline.
 concurrency:
   group: ubuntu-ci-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+
 jobs:
   test:
     runs-on: ubuntu-24.04
@@ -34,62 +33,69 @@ jobs:
           python -m pip check
       - name: Lint
         run: ruff check src tests scripts/configure_ubuntu.py
-      - name: Validate Linux installers and bootstrap
+      - name: Validate installers and bootstrap
         run: |
           bash -n bootstrap.sh
-          bash -n scripts/install_ubuntu.sh
+          bash -n scripts/install_ubuntu_stable.sh
           bash -n scripts/install_kali.sh
-          bash -n scripts/repair_capture_permissions.sh
           bash -n scripts/wait_for_console.sh
-          bash scripts/install_kali.sh --plan --interface auto | grep -q 'interface: auto'
       - name: Tests
         run: pytest -q
+
   bootstrap:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04]
     steps:
       - uses: actions/checkout@v4
-      - name: Install full Ubuntu stack and verify services
+        with:
+          fetch-depth: 0
+      - name: Install stable Ubuntu monitor
         shell: bash
         run: |
-          set +e
-          sudo bash scripts/install_ubuntu.sh --interface auto
-          install_status=$?
-          set -e
-          if [[ $install_status != 0 && $install_status != 2 ]]; then exit "$install_status"; fi
-          sudo bash scripts/repair_capture_permissions.sh --user "$USER"
+          sudo bash scripts/install_ubuntu_stable.sh --interface auto
           sudo systemctl restart campus-ops.service
           sudo bash scripts/wait_for_console.sh --timeout 60
           sudo /opt/campus-ops/venv/bin/python - <<'PY'
           from campus_ops.deployment_check import check
           report = check()
-          # Hosted kernels without BTF explicitly cannot run Falco; every
-          # other install or service failure remains a failing deployment gate.
-          problems = [p for p in report['problems'] if not p.startswith('falco: BLOCKED')]
-          assert not problems, problems
-          assert report['capture']['verified']
-          assert report['capture']['interface'] not in {None, 'any'}, report['capture']
+          assert report['state'] == 'READY', report
+          assert report['profile'] == 'stable-single-source', report
+          assert report['capture']['verified'], report['capture']
+          assert report['capture']['backend'] == 'tshark', report['capture']
+          assert report['capture']['interface'] not in {None, 'any', 'lo'}, report['capture']
           PY
-      - name: Verify automatic physical interface and service restart
+      - name: Verify parallel managed sensors are disabled
         run: |
-          sudo systemctl restart campus-ops-sensor@zeek.service
-          sleep 8
-          sudo /opt/campus-ops/venv/bin/python - <<'PY'
-          from campus_ops.deployment import deployment_status
-          status = deployment_status()['sensors']['zeek']
-          assert status['state'] == 'RUNNING', status
-          assert status['interface'] not in {None, 'any', 'lo'}, status
+          for unit in \
+            campus-ops-sensor@zeek.service \
+            campus-ops-sensor@suricata.service \
+            campus-ops-sensor@opencanary.service \
+            campus-ops-falco.service; do
+            if sudo systemctl is-active --quiet "$unit"; then
+              echo "$unit unexpectedly active"
+              exit 1
+            fi
+          done
+      - name: Verify stable live API
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request
+          with urllib.request.urlopen('http://127.0.0.1:8765/api/v1/live/status', timeout=5) as r:
+              status = json.load(r)
+          assert status['runtime_profile'] == 'stable-single-source', status
+          assert status['authoritative_packet_source'] == 'tshark', status
+          assert status['version'] == '0.4.0', status
           PY
       - name: Collect service diagnostics
         if: always()
         run: |
           mkdir -p bootstrap-logs
-          sudo journalctl -u campus-ops -u campus-ops-falco -u 'campus-ops-sensor@*' --no-pager > bootstrap-logs/journal.txt
-          sudo cp -r /var/lib/campus-ops/install /var/log/campus-ops /run/campus-ops-sensors bootstrap-logs/ || true
+          sudo journalctl -u campus-ops.service --no-pager > bootstrap-logs/journal.txt || true
+          sudo cp -r /var/lib/campus-ops/install /etc/campus-ops/deployment.json bootstrap-logs/ 2>/dev/null || true
           sudo chmod -R a+rX bootstrap-logs
       - uses: actions/upload-artifact@v4
         if: always()
