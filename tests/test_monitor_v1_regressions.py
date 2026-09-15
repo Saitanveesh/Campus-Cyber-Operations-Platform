@@ -4,6 +4,7 @@ import pytest
 
 from campus_ops.admin_layout_ui import ADMIN_LAYOUT_EXTENSION
 from campus_ops.operator_refinement import OPERATOR_REFINEMENT_EXTENSION
+from campus_ops.version import build_info
 
 
 @pytest.mark.parametrize(
@@ -33,6 +34,32 @@ def test_bootstrap_forces_real_interface_election_and_finishes_repairs():
     assert "--force-reinstall --no-deps" in script
     assert "wait_for_console.sh" in script
     assert script.index("wait_for_console.sh") < script.index("campus_ops.deployment_check")
+
+
+def test_bootstrap_records_exact_deployed_branch_and_commit():
+    script = Path("bootstrap.sh").read_text()
+    assert 'build_commit="$(git rev-parse HEAD)"' in script
+    assert 'build_branch="$(git branch --show-current)"' in script
+    assert "/etc/campus-ops/build.json" in script
+    assert '"source_dirty": $build_dirty' in script
+
+
+def test_build_info_reads_provenance_without_trusting_missing_fields(tmp_path: Path):
+    path = tmp_path / "build.json"
+    path.write_text(
+        '{"branch":"monitor-v1","commit":"0123456789abcdef","installed_at":"2026-09-15T00:00:00Z","source_dirty":false}'
+    )
+    info = build_info(path)
+    assert info["branch"] == "monitor-v1"
+    assert info["commit"] == "0123456789abcdef"
+    assert info["commit_short"] == "0123456789ab"
+    assert info["source_dirty"] is False
+
+
+def test_repository_excludes_credentials_and_evidence():
+    ignore = Path(".gitignore").read_text()
+    for pattern in ("*.pcap", "*.pcapng", "*.evtx", "*.pem", "*.key", "*.p12", "secrets/"):
+        assert pattern in ignore
 
 
 def test_readiness_gate_hides_normal_connection_refused_race_and_reports_real_failure():
