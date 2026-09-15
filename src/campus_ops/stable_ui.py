@@ -27,9 +27,9 @@ tr[data-asset]{cursor:default!important}
   });
 
   const product=document.querySelector('.product');
-  if(product) product.textContent='Campus Cyber Operations Platform · Stable 0.4';
+  if(product) product.textContent='Campus Cyber Operations Platform · Stable 0.4.1';
   const state=document.querySelector('.headstate span');
-  if(state) state.textContent='MONITOR / V0.4 STABLE';
+  if(state) state.textContent='MONITOR / V0.4.1 STABLE';
 
   // The base UI used asset-row clicks to open the now-hidden Topology console.
   // Stable mode keeps Assets as a truth-scoped inventory table and blocks that stale path.
@@ -51,7 +51,7 @@ tr[data-asset]{cursor:default!important}
     const n=document.createElement('div');
     n.id='stableTruthNote';
     n.className='stable-truth-note';
-    n.textContent='Stable mode: TShark is the single live packet source. Assets require repeated local source-frame evidence with a unicast MAC. Remote Internet addresses are shown only as traffic peers, not as local assets.';
+    n.textContent='Stable 0.4.1: TShark is the single live packet source. Capture remains ACTIVE while the TShark process is healthy; quiet traffic never becomes a link failure. Assets require repeated local source-frame evidence with a unicast MAC. Remote Internet addresses are traffic peers, not local assets.';
     overview.insertBefore(n, overview.firstChild);
   }
 })();
