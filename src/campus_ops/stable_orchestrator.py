@@ -34,14 +34,13 @@ class StableOrchestrator(Orchestrator):
         )
 
         self.workers = [
-            # Authoritative state + one network/capture path.
+            # Authoritative state + exactly one live packet source.
             self.state_sink,
             self.network,
             self.capture,
-            self.capture_health,
             self.telemetry,
             self.stale_cleanup,
-            # Deterministic in-process views derived from the same packet stream.
+            # Deterministic in-process views derived from that same packet stream.
             self.protocol_engine,
             self.asset_engine,
             self.flow_engine,
@@ -51,7 +50,9 @@ class StableOrchestrator(Orchestrator):
             self.tcp_intelligence,
             self.traffic_baseline,
             self.performance_engine,
-            # Minimal security correlation; no second packet source is started.
+            # Minimal packet-derived security correlation. The old capture-health
+            # watchdog is intentionally excluded: comparing OS counters with decoder
+            # activity created false degradation on quiet/range interfaces.
             self.arp_guard,
             self.detection,
             self.beaconing,
@@ -61,8 +62,9 @@ class StableOrchestrator(Orchestrator):
 
     def snapshot(self) -> dict[str, object]:
         result = super().snapshot()
-        result["version"] = "0.4.0"
+        result["version"] = "0.4.1"
         result["runtime_profile"] = "stable-single-source"
         result["authoritative_packet_source"] = "tshark"
         result["link_loss_confirmations"] = 5
+        result["capture_state_policy"] = "process-health-only"
         return result
