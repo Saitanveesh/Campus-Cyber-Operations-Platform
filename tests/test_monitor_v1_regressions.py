@@ -27,10 +27,12 @@ def test_secondary_admin_tabs_have_stronger_hide_rule():
     assert "#adminWorkspaceNav button.tab.admin-secondary{display:none!important}" in ADMIN_LAYOUT_EXTENSION
 
 
-def test_bootstrap_forces_real_interface_election():
+def test_bootstrap_forces_real_interface_election_and_finishes_repairs():
     script = Path("bootstrap.sh").read_text()
-    assert 'sudo bash "$installer" --interface auto' in script
+    assert 'sudo bash "$installer" --interface auto || installer_status=$?' in script
+    assert '"$installer_status" -ne 0 && "$installer_status" -ne 2' in script
     assert "repair_capture_permissions.sh" in script
+    assert "--force-reinstall --no-deps" in script
 
 
 def test_linux_capture_does_not_ask_tshark_for_raw_capture():
