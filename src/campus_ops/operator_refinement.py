@@ -42,15 +42,17 @@ nav{overflow-x:hidden!important;white-space:normal!important;display:flex!import
 const O=id=>document.getElementById(id);
 const safe=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let radialSelected='',radialLast=null;
-const ADMIN_ORDER=['admin-command','admin-soc','admin-hunt','admin-deep','admin-forensics','admin-ioc','admin-infra','admin-remote','admin-contain'];
+/* Keep the same canonical names as admin_layout_ui. This extension must never fight it. */
+const ADMIN_ORDER=['admin-command','admin-forensics','admin-red','admin-infra','admin-soc','admin-hunt','admin-deep','admin-ioc','admin-remote','admin-contain'];
 const ADMIN_NAMES={
- 'admin-command':'Command Center',
- 'admin-soc':'SOC Desk',
- 'admin-hunt':'Investigation',
- 'admin-deep':'Endpoint Analysis',
- 'admin-forensics':'Forensics',
- 'admin-ioc':'IOC Watch',
+ 'admin-command':'Operations',
+ 'admin-forensics':'Investigation',
+ 'admin-red':'Validation',
  'admin-infra':'Infrastructure',
+ 'admin-soc':'SOC Desk',
+ 'admin-hunt':'Investigation Detail',
+ 'admin-deep':'Endpoint Analysis',
+ 'admin-ioc':'IOC Watch',
  'admin-remote':'Remote Access',
  'admin-contain':'Containment'
 };
@@ -58,18 +60,22 @@ function adminToken(){return sessionStorage.getItem('campusOpsAdminToken')||''}
 function ensureAdminSubnav(){
  const nav=document.querySelector('nav');if(!nav)return null;
  let sub=O('adminWorkspaceNav');
- if(!sub){sub=document.createElement('div');sub.id='adminWorkspaceNav';const label=document.createElement('span');label.className='admin-nav-label';label.textContent='Admin Workspaces';sub.appendChild(label);nav.insertAdjacentElement('afterend',sub)}
+ if(!sub){sub=document.createElement('div');sub.id='adminWorkspaceNav';const label=document.createElement('span');label.className='admin-nav-label';label.textContent='Admin';sub.appendChild(label);nav.insertAdjacentElement('afterend',sub)}
  return sub;
 }
 function organizeAdminNavigation(){
  const nav=document.querySelector('nav'),sub=ensureAdminSubnav();if(!nav||!sub)return;
  const buttons=[...document.querySelectorAll('button.tab')].filter(b=>String(b.dataset.view||'').startsWith('admin-'));
  buttons.sort((a,b)=>{const ai=ADMIN_ORDER.indexOf(a.dataset.view),bi=ADMIN_ORDER.indexOf(b.dataset.view);return (ai<0?99:ai)-(bi<0?99:bi)});
- for(const b of buttons){const view=b.dataset.view;const name=ADMIN_NAMES[view];if(name)b.textContent=name;if(b.parentElement!==sub)sub.appendChild(b)}
+ for(const b of buttons){const view=b.dataset.view;const name=ADMIN_NAMES[view];if(name&&b.textContent!==name)b.textContent=name;if(b.parentElement!==sub)sub.appendChild(b)}
  const active=!!adminToken();sub.classList.toggle('show',active);
  if(typeof pages!=='undefined'){
    if(pages['admin-deep'])pages['admin-deep']=['Endpoint Analysis','Managed endpoint processes, connections, services and response controls.'];
-   if(pages['admin-hunt'])pages['admin-hunt']=['Investigation','Current-session target investigation workspace.'];
+   if(pages['admin-hunt'])pages['admin-hunt']=['Investigation Detail','Current-session target investigation workspace.'];
+   if(pages['admin-command'])pages['admin-command']=['Operations','Unified investigation, evidence and response workspace.'];
+   if(pages['admin-forensics'])pages['admin-forensics']=['Investigation','Forensic evidence and target analysis.'];
+   if(pages['admin-red'])pages['admin-red']=['Validation','Controlled defensive validation workspace.'];
+   if(pages['admin-infra'])pages['admin-infra']=['Infrastructure','Network and platform infrastructure telemetry.'];
  }
  const deep=O('view-admin-deep');if(deep){const h=deep.querySelector('h2');if(h&&/Endpoint Deep/i.test(h.textContent||''))h.textContent='Endpoint Analysis';const s=deep.querySelector('.small');if(s&&/Correlates authenticated endpoint telemetry/i.test(s.textContent||''))s.textContent='Process, connection, service and network correlation for managed endpoints.'}
 }
