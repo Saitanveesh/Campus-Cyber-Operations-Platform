@@ -208,15 +208,20 @@ systemctl enable campus-ops.service
 systemctl stop campus-ops.service
 "$app" "$project_root/scripts/configure_ubuntu.py" --stop-previous-console
 systemctl restart campus-ops.service
-for ((attempt=0; attempt<20; attempt++)); do
-    if curl -fsS http://127.0.0.1:8765/api/v1/system/deployment >/dev/null; then break; fi
-    sleep 1
-done
-# Allow child processes to finish initialization before checking their heartbeats.
-sleep 6
-if ! "$app" -m campus_ops.deployment_check; then
-    failures+=(health-check)
+
+# systemctl restart only confirms process launch. Uvicorn may need a short window to
+# complete application startup and bind 127.0.0.1:8765. Treat connection-refused during
+# that window as STARTING, not as an operator-visible failure.
+if bash "$project_root/scripts/wait_for_console.sh" --url http://127.0.0.1:8765/api/v1/system/deployment --timeout 60; then
+    # Allow sensor child processes to finish their first heartbeat after the API is live.
+    sleep 4
+    if ! "$app" -m campus_ops.deployment_check; then
+        failures+=(health-check)
+    fi
+else
+    failures+=(console-readiness)
 fi
+
 echo 'Console: http://127.0.0.1:8765 ; health: sudo /opt/campus-ops/venv/bin/python -m campus_ops.deployment_check'
 if ((${#failures[@]})); then
     echo "Partial setup: ${failures[*]}. Details: $report_dir/bootstrap.log"
