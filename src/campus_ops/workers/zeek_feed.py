@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,7 @@ class ZeekFeedWorker(BaseWorker):
         self.log_dirs = log_dirs or default_zeek_log_dirs()
         self._tails: dict[Path, JsonTail] = {}
         self.records = 0
+        self.last_received: float | None = None
         self.errors = 0
 
     def _active_dir(self) -> Path | None:
@@ -174,6 +176,8 @@ class ZeekFeedWorker(BaseWorker):
                 emitted += 1
         self.errors += tail.errors - before
         self.records += emitted
+        if emitted:
+            self.last_received = time.time()
         return emitted
 
     async def run(self) -> None:

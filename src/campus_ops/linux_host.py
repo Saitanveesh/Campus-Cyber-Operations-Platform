@@ -54,6 +54,9 @@ def host_status() -> dict[str, object]:
     return {
         "platform": platform.system(), "kernel": platform.release(),
         "architecture": platform.machine(), "btf_present": Path("/sys/kernel/btf/vmlinux").exists(),
+        "wsl": "microsoft" in platform.release().lower(),
+        "interface_scope": ("Interfaces exposed to this WSL guest; host Wi-Fi radio may be hidden"
+                            if "microsoft" in platform.release().lower() else "Linux host interfaces"),
         "systemd_present": Path("/run/systemd/system").exists(),
         "iproute2_present": bool(shutil.which("ip")),
         "sensor_compatibility": "NOT_VALIDATED",

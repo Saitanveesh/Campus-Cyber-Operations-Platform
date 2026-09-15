@@ -1,0 +1,10 @@
+/var/log/campus-ops/zeek/*.log /var/log/campus-ops/suricata/*.json /var/log/campus-ops/falco/*.jsonl {
+    daily
+    maxsize 32M
+    rotate 7
+    missingok
+    notifempty
+    compress
+    copytruncate
+    su root campus-ops
+}

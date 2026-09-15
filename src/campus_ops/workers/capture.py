@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import os
 
 from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, WorkerState
@@ -63,6 +64,9 @@ class CaptureWorker(BaseWorker):
         await super().stop()
 
     async def _interface_candidates(self, tshark: str, requested: str) -> list[str]:
+        if os.name != "nt":
+            # Linux interface names are stable; numeric capture indexes change on hotplug.
+            return [requested]
         process = await asyncio.create_subprocess_exec(
             tshark, "-D", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
         )
@@ -117,7 +121,8 @@ class CaptureWorker(BaseWorker):
             self.health.heartbeat("TShark unavailable")
             self.state.set_capture(
                 state="UNAVAILABLE", backend=None,
-                detail="TShark not found. Install Wireshark with Npcap.",
+                detail=("TShark not found. Run sudo bash scripts/install_ubuntu.sh."
+                        if os.name != "nt" else "TShark not found. Install Wireshark with Npcap."),
             )
             await asyncio.sleep(3)
         return None

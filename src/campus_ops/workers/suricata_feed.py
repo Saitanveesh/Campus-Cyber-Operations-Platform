@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from pathlib import Path
 
 from campus_ops.event_bus import EventBus
@@ -34,6 +35,7 @@ class SuricataFeedWorker(BaseWorker):
         self.paths = paths or default_eve_paths()
         self._tails: dict[Path, JsonTail] = {}
         self.records = 0
+        self.last_received: float | None = None
         self.errors = 0
 
     def _find_path(self) -> Path | None:
@@ -84,6 +86,7 @@ class SuricataFeedWorker(BaseWorker):
                     if event is not None and fresh(event.payload["observed_at"]):
                         await self.bus.publish(event)
                         self.records += 1
+                        self.last_received = time.time()
             except OSError as exc:
                 self.errors += 1
                 self.health.last_error = str(exc)

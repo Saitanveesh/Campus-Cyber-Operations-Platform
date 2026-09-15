@@ -51,7 +51,8 @@ class OperationsFabric(BaseWorker):
             for tool in EXPORT_TOOLS
             if (raw := os.environ.get(f"CAMPUS_OPS_{tool.upper()}_LOG", "").strip())
         }
-        self.metrics = {tool: {"accepted": 0, "errors": 0, "last_received": None}
+        self.metrics = {tool: {"accepted": 0, "errors": 0, "ignored": 0,
+                               "state": "WAITING", "last_received": None}
                         for tool in self.tails}
         self.errors = 0
         self.validation_runs: dict[str, dict] = {}
@@ -82,6 +83,7 @@ class OperationsFabric(BaseWorker):
         return (core_ok and not self.closed and self.health.state == WorkerState.HEALTHY
                 and self.errors == 0
                 and all(m["errors"] == 0 for m in self.metrics.values())
+                and all(m.get("state") == "READABLE" for m in self.metrics.values())
                 and all(row["dropped"] == 0 for row in self.bus.stats().values()))
 
     def recommendations(self) -> list[dict]:
@@ -120,8 +122,14 @@ class OperationsFabric(BaseWorker):
             old_errors = tail.errors
             try:
                 rows = tail.read(session, limit=50)
+                metric["state"] = "READABLE"
                 metric["errors"] += tail.errors - old_errors
                 for row in rows:
+                    # OpenCanary's documented 1000..1006 are boot/internal messages.
+                    # They have no remote subject and must not become intrusion alerts.
+                    if tool == "opencanary" and row.get("logtype") in range(1000, 1007):
+                        metric["ignored"] += 1
+                        continue
                     event = sensor_event(tool, "local", row, session)
                     if event is None:
                         metric["errors"] += 1
@@ -131,7 +139,11 @@ class OperationsFabric(BaseWorker):
                     await self.bus.publish(event)
                     metric["accepted"] += 1
                     metric["last_received"] = time.time()
+            except FileNotFoundError:
+                # Quiet sensors may create their output only on their first event.
+                metric["state"] = "WAITING_FILE"
             except (OSError, ValueError, TypeError, AttributeError) as exc:
+                metric["state"] = "ERROR"
                 metric["errors"] += 1
                 self.health.last_error = f"{tool}: {type(exc).__name__}: {exc}"
 
@@ -227,6 +239,7 @@ def install_operations_fabric(app: FastAPI) -> FastAPI:
         return app
     fabric = OperationsFabric(app.state.orchestrator)
     app.state.operations_fabric = fabric
+    app.state.orchestrator.operations_fabric = fabric
     app.state.orchestrator.workers.insert(0, fabric)
 
     @app.get("/api/v1/system/operations-fabric")

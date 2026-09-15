@@ -17,6 +17,12 @@ class ToolStatus:
 
 
 TOOL_SPECS: tuple[tuple[str, str, str, tuple[str, ...], bool], ...] = (
+    ("ip", "iproute2", "Linux interfaces, neighbors and routes", ("ip",), False),
+    ("iw", "iw", "Linux Wi-Fi link telemetry", ("iw",), False),
+    ("ss", "ss", "Linux socket inventory", ("ss",), False),
+    ("tcpdump", "tcpdump", "Linux packet diagnostics", ("tcpdump",), False),
+    ("zeek", "Zeek", "structured network telemetry", ("zeek",), False),
+    ("falco", "Falco", "Linux runtime detection", ("falco",), False),
     ("dumpcap", "dumpcap", "privileged packet acquisition", ("dumpcap.exe", "dumpcap"), False),
     ("tshark", "TShark", "deep protocol decoding", ("tshark.exe", "tshark"), False),
     ("suricata", "Suricata", "IDS/signature telemetry", ("suricata.exe", "suricata"), False),
@@ -147,6 +153,12 @@ def resolve_executable(key: str) -> str | None:
         resolved = shutil.which(executable)
         if resolved:
             return resolved
+    if os.name != "nt":
+        for executable in executables:
+            for directory in ("/opt/zeek/bin", "/usr/sbin", "/usr/bin"):
+                candidate = Path(directory) / executable
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return str(candidate)
     if os.name == "nt":
         for candidate in _default_candidates(key):
             if candidate.exists() and candidate.is_file():

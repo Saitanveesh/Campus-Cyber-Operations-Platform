@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 from campus_ops.event_bus import EventBus
@@ -28,6 +29,8 @@ class ForensicCaptureWorker(BaseWorker):
         self._bound: tuple[str, str] | None = None
 
     async def _resolve_interface(self, dumpcap: str, requested: str) -> str:
+        if os.name != "nt":
+            return requested
         process = await asyncio.create_subprocess_exec(
             dumpcap,
             "-D",

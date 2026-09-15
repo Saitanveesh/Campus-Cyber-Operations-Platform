@@ -38,7 +38,7 @@ def test_capability_status_scores_ready_core_capabilities():
         "job-scheduler": healthy,
     }
 
-    result = capability_status({"tools": tools, "workers": workers})
+    result = capability_status({"platform": "Windows", "tools": tools, "workers": workers})
 
     assert result["score"] == 100
     assert result["operational_readiness"] == 100
@@ -57,6 +57,7 @@ def test_capability_status_scores_ready_core_capabilities():
 def test_capability_status_reports_missing_packet_tooling():
     result = capability_status(
         {
+            "platform": "Windows",
             "tools": [
                 {"key": "npcap", "available": False},
                 {"key": "tshark", "available": False},

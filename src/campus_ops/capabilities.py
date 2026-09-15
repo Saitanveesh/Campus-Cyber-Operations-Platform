@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import platform
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -230,6 +231,41 @@ DIAGNOSTICS: dict[str, tuple[str, tuple[str, ...], str]] = {
 }
 
 
+def diagnostics_for(system: str) -> dict:
+    if system != "Linux":
+        return DIAGNOSTICS
+    return {
+        "capture-devices": DIAGNOSTICS["capture-devices"],
+        "dumpcap-devices": DIAGNOSTICS["dumpcap-devices"],
+        "network-adapters": ("ip", ("-j", "address", "show"), "Linux interfaces and addresses."),
+        "ipv4-routes": ("ip", ("-j", "-4", "route", "show"), "Linux IPv4 routes."),
+        "ipv6-routes": ("ip", ("-j", "-6", "route", "show"), "Linux IPv6 routes."),
+        "tcp-connections": ("ss", ("-ant",), "Linux TCP connection states."),
+        "wifi-link": ("iw", ("dev",), "Wi-Fi devices visible to this Linux kernel."),
+    }
+
+
+def capabilities_for(system: str) -> tuple[CapabilitySpec, ...]:
+    if system != "Linux":
+        return CAPABILITIES
+    result = []
+    for spec in CAPABILITIES:
+        if spec.key in {"windows_security_posture", "dfir_hunting", "binary_trust"}:
+            continue
+        if spec.key in {"live_packet_visibility", "forensic_packet_evidence"}:
+            spec = replace(spec, tool_groups=tuple(g for g in spec.tool_groups if g != ("npcap",)))
+        elif spec.key == "windows_endpoint_visibility":
+            spec = replace(spec, key="linux_endpoint_visibility", label="Linux Endpoint Visibility",
+                           purpose="Linux process, socket, interface and host inventory.", tool_groups=())
+        elif spec.key == "response_control":
+            spec = replace(spec, tool_groups=(), purpose="Authenticated snapshot jobs; Linux automatic containment is disabled.")
+        elif spec.key == "native_packet_diagnostics":
+            spec = replace(spec, purpose="Linux interfaces and packet diagnostics.",
+                           tool_groups=(("ip",), ("tcpdump",)))
+        result.append(spec)
+    return tuple(result)
+
+
 def _tool_map(tools: object) -> dict[str, dict[str, Any]]:
     if not isinstance(tools, list):
         return {}
@@ -251,7 +287,8 @@ def capability_status(snapshot: dict[str, Any]) -> dict[str, object]:
     workers = snapshot.get("workers") if isinstance(snapshot.get("workers"), dict) else {}
     rows: list[dict[str, object]] = []
 
-    for spec in CAPABILITIES:
+    system = str(snapshot.get("platform") or platform.system())
+    for spec in capabilities_for(system):
         tool_groups_ready = [
             any(bool(tools.get(key, {}).get("available")) for key in group)
             for group in spec.tool_groups
@@ -316,13 +353,13 @@ def capability_status(snapshot: dict[str, Any]) -> dict[str, object]:
         "next_gaps": gaps[:6],
         "diagnostics": [
             {"key": key, "tool": value[0], "description": value[2]}
-            for key, value in DIAGNOSTICS.items()
+            for key, value in diagnostics_for(system).items()
         ],
     }
 
 
 def run_diagnostic(key: str) -> dict[str, object]:
-    spec = DIAGNOSTICS.get(key)
+    spec = diagnostics_for(platform.system()).get(key)
     if spec is None:
         raise KeyError(key)
     tool_key, args, description = spec
@@ -376,7 +413,7 @@ def install_capability_routes(app: FastAPI) -> FastAPI:
 
     @app.post("/api/v1/system/diagnostics/{check}")
     async def system_diagnostic(check: str) -> dict[str, object]:
-        if check not in DIAGNOSTICS:
+        if check not in diagnostics_for(platform.system()):
             raise HTTPException(status_code=404, detail="Unknown diagnostic check")
         return run_diagnostic(check)
 

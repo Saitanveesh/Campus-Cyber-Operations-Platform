@@ -4,9 +4,12 @@ import os
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
+
+from campus_ops.deployment import deployment_status, enrich_tools
 
 
 @dataclass(slots=True)
@@ -23,7 +26,16 @@ class ToolCapability:
 
 
 def _which(command: str) -> str | None:
-    return shutil.which(command)
+    found = shutil.which(command)
+    if found:
+        return found
+    if os.name != "nt":
+        for directory in ("/opt/zeek/bin", "/opt/arkime/bin", "/opt/campus-ops/opencanary/bin",
+                          "/opt/campus-ops/analysis/bin", "/usr/sbin", "/usr/share/bcc/tools"):
+            candidate = Path(directory) / command
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+    return None
 
 
 def _wsl_which(command: str) -> str | None:
@@ -49,6 +61,10 @@ def _wsl_which(command: str) -> str | None:
 # Capability registry. Presence never authorizes execution. Active discovery tools
 # are surfaced to operators but require explicit private/lab scope before use.
 TOOLS = (
+    ("Falco", "ENDPOINT", "Linux runtime detection with modern eBPF", "falco", "PASSIVE", "RECOMMENDED"),
+    ("OpenCanary", "DECEPTION", "HTTP and SSH decoy interaction telemetry", "opencanaryd", "PASSIVE", "RECOMMENDED"),
+    ("BPF Compiler Collection (bcc)", "ENDPOINT", "on-demand Linux kernel tracing; kernel compatibility required", "execsnoop-bpfcc", "READ_ONLY", "OPTIONAL"),
+    ("bpftrace", "ENDPOINT", "on-demand Linux eBPF tracing; kernel compatibility required", "bpftrace", "READ_ONLY", "OPTIONAL"),
     ("TShark", "PACKET", "packet decode and protocol extraction", "tshark", "PASSIVE", "CORE"),
     ("dumpcap", "PACKET", "high-performance packet capture", "dumpcap", "PASSIVE", "CORE"),
     ("Wireshark", "PACKET", "interactive packet inspection", "wireshark", "PASSIVE", "OPTIONAL"),
@@ -96,7 +112,7 @@ def _targets_env(name: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def telemetry_fabric_status() -> dict[str, Any]:
+def telemetry_fabric_status(orch=None) -> dict[str, Any]:
     tools: list[ToolCapability] = []
     for name, plane, purpose, command, mode, tier in TOOLS:
         native = _which(command)
@@ -137,25 +153,27 @@ def telemetry_fabric_status() -> dict[str, Any]:
         },
     }
 
-    ready = sum(1 for tool in tools if tool.state.startswith("READY"))
-    core = [tool for tool in tools if tool.tier == "CORE"]
-    core_ready = sum(1 for tool in core if tool.state.startswith("READY"))
+    rows = enrich_tools([asdict(tool) for tool in tools], orch)
+    ready = sum(1 for tool in rows if tool["state"].startswith("READY"))
+    core = [tool for tool in rows if tool["tier"] == "CORE"]
+    core_ready = sum(1 for tool in core if tool["state"].startswith("READY"))
     by_plane: dict[str, dict[str, int]] = {}
-    for tool in tools:
-        plane = by_plane.setdefault(tool.plane, {"ready": 0, "total": 0})
+    for tool in rows:
+        plane = by_plane.setdefault(tool["plane"], {"ready": 0, "total": 0})
         plane["total"] += 1
-        if tool.state.startswith("READY"):
+        if tool["state"].startswith("READY"):
             plane["ready"] += 1
 
     return {
-        "readiness_semantics": "READY means executable presence, not verified ingestion",
-        "sensor_execution_verified": False,
+        "readiness_semantics": "READY_NATIVE/WSL: executable found; READY_LISTENING: supervised process alive; READY_RECEIVING: recent feed records received",
+        "sensor_execution_verified": any(t.get("service_state") == "RUNNING" for t in rows),
+        "deployment": deployment_status(),
         "state": "READY" if core_ready == len(core) and ready >= 8 else ("PARTIAL" if ready else "BASELINE_ONLY"),
         "ready_tools": ready,
-        "total_tools": len(tools),
+        "total_tools": len(rows),
         "core_ready": core_ready,
         "core_total": len(core),
-        "tools": [asdict(tool) for tool in tools],
+        "tools": rows,
         "planes": by_plane,
         "streaming_telemetry": protocols,
         "design_rules": [
@@ -184,11 +202,15 @@ def install_enterprise_telemetry(app: FastAPI) -> FastAPI:
 
     @app.get("/api/v1/system/telemetry-fabric")
     async def telemetry_fabric() -> dict[str, Any]:
-        return telemetry_fabric_status()
+        return telemetry_fabric_status(app.state.orchestrator)
+
+    @app.get("/api/v1/system/deployment")
+    async def system_deployment() -> dict[str, Any]:
+        return deployment_status()
 
     @app.get("/api/v1/system/enterprise-engines")
     async def enterprise_engines() -> dict[str, Any]:
-        fabric = telemetry_fabric_status()
+        fabric = telemetry_fabric_status(app.state.orchestrator)
         protocols = fabric["streaming_telemetry"]
         return {
             "engines": [

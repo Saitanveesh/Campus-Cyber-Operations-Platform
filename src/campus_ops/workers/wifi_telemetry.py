@@ -12,6 +12,21 @@ from campus_ops.workers.base import BaseWorker
 LINE_RE = re.compile(r"^\s*([^:]+?)\s*:\s*(.*?)\s*$")
 
 
+def parse_iw_link(text: str, interface: str) -> dict[str, str]:
+    if "Connected to " not in text:
+        return {}
+    result = {"name": interface, "state": "connected"}
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("Connected to "):
+            result["bssid"] = line.split()[2]
+        for prefix, key in (("SSID:", "ssid"), ("signal:", "signal"),
+                            ("freq:", "frequency_mhz"), ("tx bitrate:", "transmit_rate_(mbps)")):
+            if line.startswith(prefix):
+                result[key] = line[len(prefix):].strip()
+    return result
+
+
 def parse_netsh_wlan(text: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for line in text.splitlines():
@@ -40,7 +55,7 @@ def parse_netsh_wlan(text: str) -> dict[str, str]:
 
 
 class WifiTelemetryWorker(BaseWorker):
-    """Windows Wi-Fi radio/link telemetry without requiring monitor mode."""
+    """Read visible Wi-Fi link state using iw on Linux and netsh on Windows."""
 
     def __init__(self, bus: EventBus, state: LiveState, session_provider, interval: float = 5.0) -> None:
         super().__init__("wifi-telemetry", bus)
@@ -49,6 +64,26 @@ class WifiTelemetryWorker(BaseWorker):
         self.interval = interval
 
     async def _collect(self) -> dict[str, str]:
+        if os.name != "nt":
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    "iw", "dev", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=4)
+                names = re.findall(r"^\s*Interface (\S+)", stdout.decode(errors="replace"), re.MULTILINE)
+                for name in names:
+                    process = await asyncio.create_subprocess_exec(
+                        "iw", "dev", name, "link", stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL)
+                    stdout, _ = await asyncio.wait_for(process.communicate(), timeout=4)
+                    current = parse_iw_link(stdout.decode(errors="replace"), name)
+                    if current:
+                        return current
+            except OSError:
+                return {}
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+            return {}
         process = await asyncio.create_subprocess_exec(
             "netsh.exe",
             "wlan",
@@ -63,13 +98,6 @@ class WifiTelemetryWorker(BaseWorker):
         return parse_netsh_wlan(stdout.decode(errors="replace"))
 
     async def run(self) -> None:
-        if os.name != "nt":
-            self.health.state = WorkerState.DEGRADED
-            self.health.heartbeat("Wi-Fi telemetry is Windows-only")
-            while not self.stopping:
-                await asyncio.sleep(10)
-            return
-
         self.health.state = WorkerState.HEALTHY
         previous: dict[str, str] = {}
         while not self.stopping:
@@ -82,7 +110,7 @@ class WifiTelemetryWorker(BaseWorker):
                         source=self.name,
                         kind=EventKind.OBSERVATION,
                         session_id=session_id,
-                        evidence_class="WINDOWS_WIFI_TELEMETRY",
+                        evidence_class="WINDOWS_WIFI_TELEMETRY" if os.name == "nt" else "LINUX_WIFI_TELEMETRY",
                         payload={"type": "WIFI_TELEMETRY", **current},
                     )
                 )

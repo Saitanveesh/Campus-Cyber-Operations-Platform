@@ -8,7 +8,10 @@ def test_telemetry_fabric_truthful_shape():
     assert len(state["tools"]) == state["total_tools"]
     assert {"gnmi", "netconf", "restconf", "syslog"}.issubset(state["streaming_telemetry"])
     for tool in state["tools"]:
-        assert tool["state"] in {"READY_NATIVE", "READY_WSL", "NOT_INSTALLED"}
+        assert tool["state"] in {"READY_NATIVE", "READY_WSL", "NOT_INSTALLED", "NOT_APPLICABLE",
+                                 "REQUIRES_DEPLOYMENT", "READY_LISTENING", "READY_RECEIVING",
+                                 "NOT_RUNNING", "WAITING_INTERFACE", "FAILED", "BLOCKED",
+                                 "EXTERNAL_SERVICE", "RETRY_WAIT", "STOPPED"}
 
 
 def test_unconfigured_streaming_telemetry_is_not_faked(monkeypatch):

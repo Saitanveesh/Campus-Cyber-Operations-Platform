@@ -26,7 +26,7 @@ jobs:
           python -m pip install --no-deps -e .
           python -m pip check
       - name: Lint
-        run: ruff check src tests
+        run: ruff check src tests scripts/configure_ubuntu.py
       - name: Validate Ubuntu installer
         run: bash -n scripts/install_ubuntu.sh
       - name: Preserve existing UI
@@ -43,3 +43,51 @@ jobs:
           PY
       - name: Tests
         run: pytest -q
+  bootstrap:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install full Ubuntu stack and verify services
+        shell: bash
+        run: |
+          set +e
+          sudo bash scripts/install_ubuntu.sh --interface any
+          install_status=$?
+          set -e
+          if [[ $install_status != 0 && $install_status != 2 ]]; then exit "$install_status"; fi
+          sudo /opt/campus-ops/venv/bin/python - <<'PY'
+          from campus_ops.deployment_check import check
+          report = check()
+          # Hosted/WSL kernels without BTF explicitly cannot run Falco; every
+          # other install or service failure remains a failing deployment gate.
+          problems = [p for p in report['problems'] if not p.startswith('falco: BLOCKED')]
+          assert not problems, problems
+          assert report['capture']['verified']
+          PY
+      - name: Verify capture on all interfaces and service restart
+        run: |
+          sudo systemctl restart campus-ops-sensor@zeek.service
+          sleep 8
+          sudo /opt/campus-ops/venv/bin/python - <<'PY'
+          from campus_ops.deployment import deployment_status
+          status = deployment_status()['sensors']['zeek']
+          assert status['state'] == 'RUNNING', status
+          assert status['interface'] == 'any', status
+          PY
+      - name: Collect service diagnostics
+        if: always()
+        run: |
+          mkdir -p bootstrap-logs
+          sudo journalctl -u campus-ops -u campus-ops-falco -u 'campus-ops-sensor@*' --no-pager > bootstrap-logs/journal.txt
+          sudo cp -r /var/lib/campus-ops/install /var/log/campus-ops /run/campus-ops-sensors bootstrap-logs/ || true
+          sudo chmod -R a+rX bootstrap-logs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bootstrap-${{ matrix.os }}
+          path: bootstrap-logs

@@ -1,0 +1,22 @@
+[Unit]
+Description=Campus Ops Falco modern eBPF supervisor
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/sys/kernel/btf/vmlinux
+
+[Service]
+Type=simple
+User=root
+Group=campus-ops
+ExecStart=/opt/campus-ops/venv/bin/python -m campus_ops.sensor_runner falco
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=15
+UMask=0027
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/campus-ops /run/campus-ops-sensors
+
+[Install]
+WantedBy=multi-user.target

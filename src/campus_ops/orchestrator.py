@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import platform
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import ClassVar
@@ -437,6 +438,7 @@ class Orchestrator:
             overall = "DEGRADED"
         return {
             "product": "Campus Cyber Operations Platform",
+            "platform": platform.system(),
             "version": "0.3.0",
             "overall": overall,
             "session_id": self.session_id,

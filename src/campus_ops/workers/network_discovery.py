@@ -33,11 +33,15 @@ VIRTUAL_HINTS = (
 
 def classify_interface(name: str) -> str:
     lowered = name.lower()
+    if lowered.startswith(("lo", "loopback")):
+        return "loopback"
+    if lowered.startswith(("tun", "tap", "wg", "ppp", "tailscale", "zt")):
+        return "tunnel"
     if any(token in lowered for token in VIRTUAL_HINTS):
         return "virtual"
     if lowered.startswith(("wlp", "wlx")) or "wi-fi" in lowered or "wifi" in lowered or "wireless" in lowered or "wlan" in lowered:
         return "wireless"
-    if "ethernet" in lowered or lowered.startswith(("eth", "enp", "ens", "eno", "enx")):
+    if "ethernet" in lowered or lowered.startswith(("eth", "enp", "ens", "eno", "enx", "usb")):
         return "ethernet"
     return "other"
 
@@ -150,7 +154,7 @@ def discover_candidates() -> list[NetworkCandidate]:
         ipv4: list[str] = []
         ipv6: list[str] = []
         prefixes: list[str] = []
-        is_loopback = False
+        is_loopback = name == "lo"
         for addr in addr_list:
             value = addr.address
             if addr.family.name == "AF_INET":
@@ -161,6 +165,8 @@ def discover_candidates() -> list[NetworkCandidate]:
                     prefix = _prefix(value, addr.netmask)
                     if prefix:
                         prefixes.append(prefix)
+            elif addr.family.name == "AF_INET6" and value.split("%", 1)[0] == "::1":
+                is_loopback = True
             elif addr.family.name == "AF_INET6" and _is_usable_ip(value):
                 clean = value.split("%", 1)[0]
                 ipv6.append(clean)
@@ -189,7 +195,26 @@ def discover_candidates() -> list[NetworkCandidate]:
     return candidates
 
 
-def elect_network(candidates: list[NetworkCandidate]) -> SelectedNetwork | None:
+def elect_network(candidates: list[NetworkCandidate], requested: str | None = None) -> SelectedNetwork | None:
+    requested = requested if requested is not None else os.environ.get("CAMPUS_OPS_INTERFACE", "auto")
+    if requested and requested != "auto":
+        if requested == "any" and os.name != "nt":
+            live = [c for c in candidates if c.is_up and not c.is_loopback]
+            if not live:
+                return None
+            return SelectedNetwork(
+                "any", 100, ("all-linux-interfaces",),
+                tuple(sorted({ip for c in live for ip in c.ipv4})),
+                tuple(sorted({ip for c in live for ip in c.ipv6})),
+                tuple(sorted({prefix for c in live for prefix in c.prefixes})),
+                any(c.default_route for c in live), None, None,
+            )
+        forced = next((c for c in candidates if c.name == requested and c.is_up), None)
+        if forced is None:
+            return None
+        return SelectedNetwork(forced.name, 100, ("explicit-interface",), forced.ipv4,
+                               forced.ipv6, forced.prefixes, forced.default_route,
+                               forced.route_metric, forced.gateway)
     scored = [(score_candidate(candidate), candidate) for candidate in candidates]
     viable = [(result, candidate) for result, candidate in scored if result[0] >= 40]
     if not viable:
@@ -241,7 +266,7 @@ class NetworkDiscoveryWorker(BaseWorker):
 
     async def run(self) -> None:
         while not self.stopping:
-            self.candidates = discover_candidates()
+            self.candidates = await asyncio.to_thread(discover_candidates)
             proposed = elect_network(self.candidates)
             await self._consider(proposed)
             if self.selected:
@@ -257,6 +282,8 @@ class NetworkDiscoveryWorker(BaseWorker):
 
     async def _consider(self, proposed: SelectedNetwork | None) -> None:
         if proposed is None:
+            self._pending_name = None
+            self._pending_count = 0
             if self.selected is not None:
                 old = self.selected
                 self.selected = None
@@ -268,6 +295,21 @@ class NetworkDiscoveryWorker(BaseWorker):
                     )
                 )
             return
+        if self.selected is not None and self.candidates:
+            current = next((c for c in self.candidates if c.name == self.selected.interface), None)
+            if self.selected.interface != "any" and (current is None or not current.is_up):
+                old = self.selected
+                self.selected = None
+                self._pending_name = None
+                self._pending_count = 0
+                await self.bus.publish(Event(source=self.name, kind=EventKind.NETWORK,
+                    payload={"change": "NETWORK_UNAVAILABLE", "previous": asdict(old)}))
+            elif current is not None:
+                # Compare against current link/route state, never yesterday's high score.
+                current_score, current_reasons = score_candidate(current)
+                self.selected = SelectedNetwork(current.name, current_score, current_reasons,
+                    self.selected.ipv4, self.selected.ipv6, self.selected.prefixes,
+                    self.selected.default_route, self.selected.route_metric, self.selected.gateway)
         if self.selected is None:
             await self._confirm_and_switch(proposed)
             return
@@ -295,7 +337,10 @@ class NetworkDiscoveryWorker(BaseWorker):
                     )
                 )
             return
-        if proposed.score < self.selected.score + self.switch_margin:
+        forced = "explicit-interface" in proposed.reasons or proposed.interface == "any"
+        if not forced and proposed.score < self.selected.score + self.switch_margin:
+            self._pending_name = None
+            self._pending_count = 0
             return
         await self._confirm_and_switch(proposed)
 
