@@ -33,6 +33,26 @@ def test_bootstrap_forces_real_interface_election_and_finishes_repairs():
     assert '"$installer_status" -ne 0 && "$installer_status" -ne 2' in script
     assert "repair_capture_permissions.sh" in script
     assert "--force-reinstall --no-deps" in script
+    assert "wait_for_console.sh" in script
+    assert script.index("wait_for_console.sh") < script.index("campus_ops.deployment_check")
+
+
+def test_readiness_gate_hides_normal_connection_refused_race_and_reports_real_failure():
+    wait = Path("scripts/wait_for_console.sh").read_text()
+    assert "curl --silent --fail --max-time 2" in wait
+    assert ">/dev/null 2>&1" in wait
+    assert "systemctl is-failed --quiet" in wait
+    assert "journalctl -u" in wait
+    assert "timeout_seconds=60" in wait
+
+
+def test_installers_use_shared_readiness_gate():
+    ubuntu = Path("scripts/install_ubuntu.sh").read_text()
+    kali = Path("scripts/install_kali.sh").read_text()
+    assert "wait_for_console.sh" in ubuntu
+    assert "wait_for_console.sh" in kali
+    assert "curl -fsS http://127.0.0.1:8765" not in ubuntu
+    assert "curl -fsS http://127.0.0.1:8765" not in kali
 
 
 def test_linux_capture_does_not_ask_tshark_for_raw_capture():
