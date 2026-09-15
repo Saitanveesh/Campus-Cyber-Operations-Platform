@@ -4,6 +4,13 @@ on:
     branches: [monitor-v1, 'codex/ubuntu-*']
   pull_request:
     branches: [monitor-v1, main]
+
+# A direct monitor-v1 push and its PR update can otherwise create duplicate four-job
+# matrices. Use the head branch as the shared key and keep only the newest pipeline.
+concurrency:
+  group: ubuntu-ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 jobs:
