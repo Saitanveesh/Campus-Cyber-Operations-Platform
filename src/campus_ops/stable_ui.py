@@ -31,6 +31,24 @@ tr[data-asset]{cursor:default!important}
   const state=document.querySelector('.headstate span');
   if(state) state.textContent='MONITOR / V0.4.1 STABLE';
 
+  // "eth0" is the interface the Linux capture process actually sees. On WSL it is
+  // a virtual adapter even when Windows itself is using Wi-Fi, so never label it as
+  // Ethernet/Wi-Fi based only on its Linux name. Keep the operator wording factual.
+  const iface=document.getElementById('iface');
+  if(iface&&iface.previousElementSibling){
+    iface.previousElementSibling.textContent='Capture Interface';
+  }
+  document.querySelectorAll('#view-network h2').forEach(h=>{
+    const title=(h.textContent||'').trim();
+    if(title==='Network Interface') h.textContent='Capture Interface';
+    if(title==='Wi-Fi Link'){
+      const panel=h.closest('section.equal');
+      const column=h.closest('div');
+      if(column) column.style.display='none';
+      if(panel) panel.style.gridTemplateColumns='1fr';
+    }
+  });
+
   // The base UI used asset-row clicks to open the now-hidden Topology console.
   // Stable mode keeps Assets as a truth-scoped inventory table and blocks that stale path.
   document.addEventListener('click',e=>{
@@ -51,7 +69,7 @@ tr[data-asset]{cursor:default!important}
     const n=document.createElement('div');
     n.id='stableTruthNote';
     n.className='stable-truth-note';
-    n.textContent='Stable 0.4.1: TShark is the single live packet source. Capture remains ACTIVE while the TShark process is healthy; quiet traffic never becomes a link failure. Assets require repeated local source-frame evidence with a unicast MAC. Remote Internet addresses are traffic peers, not local assets.';
+    n.textContent='Stable 0.4.1: TShark is the single live packet source. Capture remains ACTIVE while the TShark process is healthy; quiet traffic never becomes a link failure. The interface shown is the interface Linux actually captures from. Assets require repeated local source-frame evidence with a unicast MAC. Remote Internet addresses are traffic peers, not local assets.';
     overview.insertBefore(n, overview.firstChild);
   }
 })();
