@@ -12,13 +12,55 @@ from campus_ops.tooling.registry import resolve_executable
 from campus_ops.workers.network_discovery import discover_candidates, elect_network
 
 
+def _capture_pipeline_check(interface: str, dumpcap: str, tshark: str) -> tuple[bool, str]:
+    """Exercise the same privilege boundary used by the Linux runtime.
+
+    dumpcap opens the interface as campus-ops and writes pcap to stdout. TShark is
+    deliberately only a decoder reading stdin; it never requests capture privilege.
+    """
+    acquire = None
+    decode = None
+    try:
+        acquire = subprocess.Popen(
+            ["runuser", "-u", "campus-ops", "--", dumpcap,
+             "-q", "-i", interface, "-a", "duration:1", "-w", "-"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        assert acquire.stdout is not None
+        decode = subprocess.Popen(
+            ["runuser", "-u", "campus-ops", "--", tshark, "-n", "-r", "-"],
+            stdin=acquire.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        # The decoder owns its duplicate of the pipe now. Closing the parent copy is
+        # required so EOF propagates when dumpcap exits.
+        acquire.stdout.close()
+        _, decode_stderr = decode.communicate(timeout=8)
+        acquire_stderr = acquire.stderr.read() if acquire.stderr is not None else b""
+        acquire_code = acquire.wait(timeout=3)
+        decode_code = decode.returncode
+        if acquire_code == 0 and decode_code == 0:
+            return True, "dumpcap+tshark pipeline verified"
+        detail = (
+            f"dumpcap={acquire_code}, tshark={decode_code}; "
+            f"dumpcap stderr={acquire_stderr.decode(errors='replace')[-350:]}; "
+            f"tshark stderr={decode_stderr.decode(errors='replace')[-350:]}"
+        )
+        return False, detail
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        for process in (decode, acquire):
+            if process is not None and process.poll() is None:
+                process.kill()
+        return False, str(exc)
+
+
 def check() -> dict:
     deployment = deployment_status()
     problems = []
     if not deployment["installed"]:
-        problems.append("No installation manifest; run sudo bash scripts/install_ubuntu.sh")
+        problems.append("No installation manifest; run bash bootstrap.sh")
+    tools = {name: resolve_executable(name) for name in ("tshark", "dumpcap", "tcpdump")}
     for name in ("tshark", "dumpcap"):
-        if not resolve_executable(name):
+        if not tools[name]:
             problems.append(f"Missing executable: {name}")
     try:
         with urllib.request.urlopen("http://127.0.0.1:8765/api/v1/system/deployment", timeout=5) as response:
@@ -39,21 +81,23 @@ def check() -> dict:
     bound = next((deployment["sensors"][name].get("interface") for name in ("zeek", "suricata")
                   if deployment["sensors"][name].get("interface")), None)
     selected = elect_network(discover_candidates(), requested=bound)
-    capture = {"interface": selected.interface if selected else None, "verified": False}
-    dumpcap = resolve_executable("dumpcap")
-    if selected and dumpcap:
-        # Verify capture permissions as the actual service account, without traffic injection.
-        try:
-            result = subprocess.run(["runuser", "-u", "campus-ops", "--", dumpcap,
-                                     "-i", selected.interface, "-a", "duration:1", "-w", "/dev/null"],
-                                    capture_output=True, text=True, timeout=8, check=False)
-            capture["verified"] = result.returncode == 0
-            if result.returncode:
-                problems.append("Capture permission/device check failed: " + result.stderr[-500:])
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            problems.append(f"Capture check unavailable (run health check with sudo): {exc}")
+    capture = {
+        "interface": selected.interface if selected else None,
+        "verified": False,
+        "backend": "dumpcap+tshark",
+    }
+    dumpcap = tools["dumpcap"]
+    tshark = tools["tshark"]
+    if selected and dumpcap and tshark:
+        verified, detail = _capture_pipeline_check(selected.interface, dumpcap, tshark)
+        capture["verified"] = verified
+        capture["detail"] = detail
+        if not verified:
+            problems.append(
+                "Capture pipeline check failed. Run 'bash bootstrap.sh' to repair capture privileges: " + detail
+            )
     else:
-        problems.append("No eligible network interface or dumpcap unavailable")
+        problems.append("No eligible network interface or dumpcap/TShark unavailable")
     for name, item in deployment["installation"].get("components", {}).items():
         if item["state"] == "FAILED":
             problems.append(f"Installation failed: {name}")
