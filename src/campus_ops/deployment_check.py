@@ -36,7 +36,9 @@ def check() -> dict:
             problems.append(f"{name}: {status['state']} {status.get('detail', '')}")
         elif time.time() - (status.get("started_at") or time.time()) < 5:
             problems.append(f"{name}: still starting; rerun health check shortly")
-    selected = elect_network(discover_candidates())
+    bound = next((deployment["sensors"][name].get("interface") for name in ("zeek", "suricata")
+                  if deployment["sensors"][name].get("interface")), None)
+    selected = elect_network(discover_candidates(), requested=bound)
     capture = {"interface": selected.interface if selected else None, "verified": False}
     dumpcap = resolve_executable("dumpcap")
     if selected and dumpcap:

@@ -1,4 +1,4 @@
-/var/log/campus-ops/zeek/*.log /var/log/campus-ops/suricata/*.json /var/log/campus-ops/falco/*.jsonl {
+/var/log/campus-ops/zeek/*.log /var/log/campus-ops/suricata/*.json /var/log/campus-ops/falco/*.jsonl /var/log/campus-ops/suricata/sensor.log /var/log/campus-ops/falco/sensor.log /var/log/campus-ops/opencanary/sensor.log {
     daily
     maxsize 32M
     rotate 7

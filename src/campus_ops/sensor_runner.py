@@ -14,6 +14,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import psutil
+
 from campus_ops.event_bus import EventBus
 from campus_ops.workers.network_discovery import (
     NetworkDiscoveryWorker,
@@ -118,6 +120,23 @@ class Supervisor:
                 self.stop_child()
                 self.next_start = time.monotonic() + 15
                 self.status("FAILED", str(exc)[:240])
+                return
+        if self.sensor == "opencanary":
+            try:
+                config = json.loads(Path("/etc/campus-ops/sensors/opencanary.conf").read_text())
+                expected = {int(config[f"{name}.port"]) for name in ("http", "ssh")
+                            if config.get(f"{name}.enabled")}
+                listening = {c.laddr.port for c in psutil.Process(self.process.pid).net_connections()
+                             if c.status == "LISTEN"}
+                if not expected or not expected.issubset(listening):
+                    self.status("STARTING" if time.time() - self.started_at < 15 else "FAILED",
+                                "Waiting for configured HTTP/SSH listeners; check sensor.log")
+                    if time.time() - self.started_at >= 15:
+                        self.stop_child()
+                        self.next_start = time.monotonic() + 15
+                    return
+            except (OSError, ValueError, KeyError, psutil.Error) as exc:
+                self.status("FAILED", f"Listener verification failed: {exc}")
                 return
         self.status("RUNNING", "Process alive; ingestion counters establish received evidence")
 

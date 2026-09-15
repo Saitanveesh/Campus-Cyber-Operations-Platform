@@ -11,7 +11,7 @@ def test_telemetry_fabric_truthful_shape():
         assert tool["state"] in {"READY_NATIVE", "READY_WSL", "NOT_INSTALLED", "NOT_APPLICABLE",
                                  "REQUIRES_DEPLOYMENT", "READY_LISTENING", "READY_RECEIVING",
                                  "NOT_RUNNING", "WAITING_INTERFACE", "FAILED", "BLOCKED",
-                                 "EXTERNAL_SERVICE", "RETRY_WAIT", "STOPPED"}
+                                 "EXTERNAL_SERVICE", "RETRY_WAIT", "STOPPED", "STARTING"}
 
 
 def test_unconfigured_streaming_telemetry_is_not_faked(monkeypatch):

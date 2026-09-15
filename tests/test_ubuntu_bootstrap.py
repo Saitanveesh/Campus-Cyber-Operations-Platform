@@ -5,6 +5,7 @@ import time
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from test_network_discovery import candidate
@@ -169,6 +170,38 @@ def test_supervisor_rebinds_and_stops_on_interface_loss(tmp_path, monkeypatch):
     supervisor.tick(None)
     assert children[-1].returncode == 0
     assert json.loads((tmp_path / "run/zeek.json").read_text())["state"] == "WAITING_INTERFACE"
+
+
+def test_canary_alive_without_listeners_is_not_ready(tmp_path, monkeypatch):
+    child = Mock(pid=123)
+    child.poll.return_value = None
+    monkeypatch.setattr("campus_ops.sensor_runner.LOG_ROOT", tmp_path / "logs")
+    monkeypatch.setattr("campus_ops.sensor_runner.subprocess.Popen", lambda *a, **kw: child)
+    reader = Path.read_text
+
+    def read(path, *args, **kwargs):
+        if str(path) == "/etc/campus-ops/sensors/opencanary.conf":
+            return json.dumps({"http.enabled": True, "http.port": 8081,
+                               "ssh.enabled": True, "ssh.port": 8022})
+        return reader(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    process = Mock()
+    process.net_connections.return_value = []
+    monkeypatch.setattr("campus_ops.sensor_runner.psutil.Process", lambda pid: process)
+    supervisor = Supervisor("opencanary", tmp_path / "run")
+    supervisor.tick(None)
+    status = tmp_path / "run/opencanary.json"
+    assert json.loads(status.read_text())["state"] == "STARTING"
+    process.net_connections.return_value = [
+        SimpleNamespace(status="LISTEN", laddr=SimpleNamespace(port=port)) for port in (8081, 8022)]
+    supervisor.tick(None)
+    assert json.loads(status.read_text())["state"] == "RUNNING"
+    process.net_connections.return_value = []
+    supervisor.started_at = time.time() - 20
+    supervisor.tick(None)
+    assert json.loads(status.read_text())["state"] == "FAILED"
+    child.terminate.assert_called_once()
 
 
 async def test_missing_quiet_feed_and_canary_boot_do_not_poison_error_gate(tmp_path, monkeypatch):
