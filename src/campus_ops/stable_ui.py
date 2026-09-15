@@ -22,6 +22,10 @@ button.tab[data-view="history"] { display:none !important; }
   document.querySelectorAll('button.tab[data-view]').forEach(b=>{
     if(!allowed.has(b.dataset.view)) b.style.display='none';
   });
+  const product=document.querySelector('.product');
+  if(product) product.textContent='Campus Cyber Operations Platform · Stable 0.4';
+  const state=document.querySelector('.headstate span');
+  if(state) state.textContent='MONITOR / V0.4 STABLE';
   const overview=document.getElementById('view-overview');
   if(overview&&!document.getElementById('stableTruthNote')){
     const n=document.createElement('div');
