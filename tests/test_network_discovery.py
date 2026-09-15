@@ -80,3 +80,54 @@ async def test_same_interface_network_identity_change_emits_event():
     assert event.payload["change"] == "NETWORK_IDENTITY_CHANGED"
     assert event.payload["previous"]["ipv4"] == ("192.0.2.10",)
     assert event.payload["current"]["ipv4"] == ("192.0.2.20",)
+
+
+@pytest.mark.asyncio
+async def test_single_missing_poll_does_not_destroy_active_hotspot_session():
+    bus = EventBus()
+    sub = await bus.subscribe("test")
+    worker = NetworkDiscoveryWorker(bus, confirmations=1, unavailable_confirmations=3)
+    worker.selected = selected(interface="wlp130s0f0", reasons=("explicit-interface",))
+
+    await worker._consider(None)
+
+    assert worker.selected is not None
+    assert worker.selected.interface == "wlp130s0f0"
+    assert worker._loss_count == 1
+    assert sub.queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_network_unavailable_requires_consecutive_confirmations():
+    bus = EventBus()
+    sub = await bus.subscribe("test")
+    worker = NetworkDiscoveryWorker(bus, confirmations=1, unavailable_confirmations=3)
+    worker.selected = selected(interface="wlp130s0f0", reasons=("explicit-interface",))
+
+    await worker._consider(None)
+    await worker._consider(None)
+    assert worker.selected is not None
+    assert sub.queue.empty()
+
+    await worker._consider(None)
+    assert worker.selected is None
+    event = sub.queue.get_nowait()
+    assert event.payload["change"] == "NETWORK_UNAVAILABLE"
+    assert event.payload["previous"]["interface"] == "wlp130s0f0"
+
+
+@pytest.mark.asyncio
+async def test_link_recovery_clears_loss_counter_without_session_reset():
+    bus = EventBus()
+    sub = await bus.subscribe("test")
+    worker = NetworkDiscoveryWorker(bus, confirmations=1, unavailable_confirmations=3)
+    hotspot = selected(interface="wlp130s0f0", reasons=("explicit-interface",))
+    worker.selected = hotspot
+
+    await worker._consider(None)
+    assert worker._loss_count == 1
+
+    await worker._consider(hotspot)
+    assert worker.selected == hotspot
+    assert worker._loss_count == 0
+    assert sub.queue.empty()
