@@ -5,35 +5,44 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
+from campus_ops.admin import install_admin_routes
+from campus_ops.admin_ui import ADMIN_EXTENSION
+from campus_ops.pathspace_ui import PATHSPACE_EXTENSION
+from campus_ops.topology_ui import TOPOLOGY_EXTENSION
+
 
 _STABLE_UI = r"""
 <style>
-/* Stable mode deliberately exposes only views backed by the single packet pipeline. */
-button.tab[data-view="topology"],
+/* Stable mode removes consoles that need separate agents/control/evidence pipelines,
+   but keeps the packet-derived operational views operators actually use. */
 button.tab[data-view="endpoints"],
 button.tab[data-view="response"],
 button.tab[data-view="evidence"],
 button.tab[data-view="history"] { display:none !important; }
+/* Stable Admin is passive/forensic. Do not expose controls whose workers are not running. */
+button.tab[data-view="admin-remote"],
+button.tab[data-view="admin-contain"],
+#view-admin-remote,
+#view-admin-contain,
+#adminForensicProbe { display:none !important; }
 #view-security section.equal{display:none!important}
 #view-system section.equal{display:none!important}
-tr[data-asset]{cursor:default!important}
 .stable-truth-note{margin:12px 0;padding:10px 12px;border:1px solid #c7c7c7;font-size:10px;line-height:1.45;color:#444}
 </style>
 <script>
 (()=>{
-  const allowed=new Set(['overview','network','assets','traffic','security','system']);
+  const allowed=new Set(['overview','network','topology','assets','traffic','security','system']);
   document.querySelectorAll('button.tab[data-view]').forEach(b=>{
-    if(!allowed.has(b.dataset.view)) b.style.display='none';
+    if(!allowed.has(b.dataset.view) && !b.dataset.view.startsWith('admin-')) b.style.display='none';
   });
 
   const product=document.querySelector('.product');
-  if(product) product.textContent='Campus Cyber Operations Platform · Stable 0.4.1';
+  if(product) product.textContent='Campus Cyber Operations Platform · Stable 0.4.2';
   const state=document.querySelector('.headstate span');
-  if(state) state.textContent='MONITOR / V0.4.1 STABLE';
+  if(state) state.textContent='MONITOR / V0.4.2 STABLE';
 
-  // "eth0" is the interface the Linux capture process actually sees. On WSL it is
-  // a virtual adapter even when Windows itself is using Wi-Fi, so never label it as
-  // Ethernet/Wi-Fi based only on its Linux name. Keep the operator wording factual.
+  // Show the exact Linux capture interface. On WSL, eth0 may sit behind a Windows
+  // Wi-Fi connection; guessing the physical medium from the Linux device name is wrong.
   const iface=document.getElementById('iface');
   if(iface&&iface.previousElementSibling){
     iface.previousElementSibling.textContent='Capture Interface';
@@ -49,15 +58,6 @@ tr[data-asset]{cursor:default!important}
     }
   });
 
-  // The base UI used asset-row clicks to open the now-hidden Topology console.
-  // Stable mode keeps Assets as a truth-scoped inventory table and blocks that stale path.
-  document.addEventListener('click',e=>{
-    if(e.target.closest&&e.target.closest('tr[data-asset]')){
-      e.preventDefault();
-      e.stopImmediatePropagation();
-    }
-  },true);
-
   // System should show the workers that actually run, not unused audio/adapters/tool hubs.
   document.querySelectorAll('#view-system section').forEach(section=>{
     const title=(section.querySelector('h2')?.textContent||'').trim();
@@ -69,7 +69,7 @@ tr[data-asset]{cursor:default!important}
     const n=document.createElement('div');
     n.id='stableTruthNote';
     n.className='stable-truth-note';
-    n.textContent='Stable 0.4.1: TShark is the single live packet source. Capture remains ACTIVE while the TShark process is healthy; quiet traffic never becomes a link failure. The interface shown is the interface Linux actually captures from. Assets require repeated local source-frame evidence with a unicast MAC. Remote Internet addresses are traffic peers, not local assets.';
+    n.textContent='Stable 0.4.2: TShark is the only live packet source. Topology and Path Space are derived from that same packet stream, not extra capture tools. Capture stays ACTIVE while TShark is healthy; quiet traffic is not a failure. Assets require repeated local source-frame evidence with a unicast MAC.';
     overview.insertBefore(n, overview.firstChild);
   }
 })();
@@ -82,6 +82,10 @@ def install_stable_ui(app: FastAPI) -> FastAPI:
         return app
     app.state.stable_ui_installed = True
 
+    # Admin login/targets/forensics are local-only and operate on the same stable
+    # snapshot. Response/containment workers are deliberately not started in stable mode.
+    install_admin_routes(app)
+
     @app.middleware("http")
     async def stable_console(request: Request, call_next):
         if request.method == "GET" and request.url.path == "/":
@@ -90,7 +94,10 @@ def install_stable_ui(app: FastAPI) -> FastAPI:
                 html = ui_path.read_text(encoding="utf-8")
             except OSError:
                 return await call_next(request)
-            html = html.replace("</body>", f"{_STABLE_UI}\n</body>")
+            html = html.replace(
+                "</body>",
+                f"{TOPOLOGY_EXTENSION}\n{PATHSPACE_EXTENSION}\n{ADMIN_EXTENSION}\n{_STABLE_UI}\n</body>",
+            )
             return HTMLResponse(
                 html,
                 headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
