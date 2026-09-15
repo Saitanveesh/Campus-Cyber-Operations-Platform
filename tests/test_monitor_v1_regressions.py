@@ -22,8 +22,6 @@ def test_admin_extensions_use_one_canonical_label_set(view: str, label: str):
 
 
 def test_secondary_admin_tabs_have_stronger_hide_rule():
-    # operator_refinement has a generic display:block!important rule, so this selector
-    # must remain more specific or the hidden workspaces return to the navigation row.
     assert "#adminWorkspaceNav button.tab.admin-secondary{display:none!important}" in ADMIN_LAYOUT_EXTENSION
 
 
@@ -53,6 +51,18 @@ def test_installers_use_shared_readiness_gate():
     assert "wait_for_console.sh" in kali
     assert "curl -fsS http://127.0.0.1:8765" not in ubuntu
     assert "curl -fsS http://127.0.0.1:8765" not in kali
+
+
+def test_managed_console_inherits_linux_capture_capabilities():
+    unit = Path("deploy/campus-ops.service").read_text()
+    assert "AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN" in unit
+    assert "CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN" in unit
+    assert "SupplementaryGroups=wireshark" in unit
+
+    check = Path("src/campus_ops/deployment_check.py").read_text()
+    assert "_managed_service_capability_check" in check
+    assert 'values.get("CapEff", "0")' in check
+    assert 'values.get("CapAmb", "0")' in check
 
 
 def test_linux_capture_does_not_ask_tshark_for_raw_capture():
