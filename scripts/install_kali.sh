@@ -199,10 +199,10 @@ systemctl stop campus-ops.service 2>/dev/null || true
 "$app" "$project_root/scripts/configure_ubuntu.py" --stop-previous-console
 systemctl restart campus-ops.service
 
-for ((attempt=0; attempt<25; attempt++)); do
-    if curl -fsS http://127.0.0.1:8765/api/v1/system/deployment >/dev/null 2>&1; then break; fi
-    sleep 1
-done
+if ! bash "$project_root/scripts/wait_for_console.sh" --url http://127.0.0.1:8765/api/v1/system/deployment --timeout 60; then
+    echo 'Campus Ops console did not become ready; service diagnostics were printed above.' >&2
+    exit 2
+fi
 sleep 4
 "$app" -m campus_ops.deployment_check || true
 
