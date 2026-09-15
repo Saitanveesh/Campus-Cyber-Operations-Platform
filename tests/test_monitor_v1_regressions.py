@@ -39,10 +39,12 @@ def test_runtime_does_not_mount_experimental_console_layers():
         assert forbidden not in main
 
 
-def test_stable_orchestrator_does_not_start_parallel_or_heuristic_capture_feeds():
+def test_stable_orchestrator_keeps_one_packet_source_but_restores_topology_derivation():
     stable = Path("src/campus_ops/stable_orchestrator.py").read_text()
     assert "self.capture," in stable
+    assert "self.topology_engine," in stable
     assert 'result["authoritative_packet_source"] = "tshark"' in stable
+    assert 'result["topology_source"] = "same-tshark-packet-stream"' in stable
     assert 'result["capture_state_policy"] = "process-health-only"' in stable
     for forbidden in (
         "self.capture_health,",
@@ -90,12 +92,19 @@ def test_flows_are_packet_observed_and_tied_to_local_scope():
     assert "FLOW_TELEMETRY" not in source
 
 
-def test_stable_ui_exposes_only_core_consoles():
+def test_stable_ui_restores_topology_pathspace_and_passive_admin():
     source = Path("src/campus_ops/stable_ui.py").read_text()
-    assert "'overview','network','assets','traffic','security','system'" in source
-    for hidden in ("topology", "endpoints", "response", "evidence", "history"):
+    assert "TOPOLOGY_EXTENSION" in source
+    assert "PATHSPACE_EXTENSION" in source
+    assert "ADMIN_EXTENSION" in source
+    assert "install_admin_routes(app)" in source
+    assert "'overview','network','topology','assets','traffic','security','system'" in source
+    assert 'button.tab[data-view="topology"]' not in source
+    assert 'button.tab[data-view="admin-remote"]' in source
+    assert 'button.tab[data-view="admin-contain"]' in source
+    for hidden in ("endpoints", "response", "evidence", "history"):
         assert f'data-view=\\"{hidden}\\"' in source
-    assert "Stable 0.4" in source
+    assert "Stable 0.4.2" in source
 
 
 def test_bootstrap_records_exact_deployed_branch_and_commit():
@@ -151,6 +160,6 @@ def test_dependency_constraints_do_not_reintroduce_invalid_websockets_pin():
     assert "websockets==17.1" not in constraints
 
 
-def test_package_version_is_stable_0_4_1():
+def test_package_version_is_stable_0_4_2():
     project = Path("pyproject.toml").read_text()
-    assert 'version = "0.4.1"' in project
+    assert 'version = "0.4.2"' in project
