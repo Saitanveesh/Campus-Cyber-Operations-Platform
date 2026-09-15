@@ -46,6 +46,10 @@ class EventBus:
 
     def stats(self) -> dict[str, dict[str, int]]:
         return {
-            name: {"queued": sub.queue.qsize(), "dropped": sub.dropped}
+            name: {
+                "queued": sub.queue.qsize(),
+                "dropped": sub.dropped,
+                "capacity": self._queue_size,
+            }
             for name, sub in self._subs.items()
         }

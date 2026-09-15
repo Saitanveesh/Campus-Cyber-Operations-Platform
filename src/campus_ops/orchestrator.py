@@ -1,22 +1,97 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
+import platform
 from dataclasses import asdict
 from datetime import UTC, datetime
+from typing import ClassVar
 from uuid import uuid4
 
+from campus_ops.agent_plane import AgentRegistry
 from campus_ops.config import DEFAULT_SETTINGS, Settings
-from campus_ops.event_bus import EventBus
-from campus_ops.models import Event, EventKind, WorkerState
+from campus_ops.control import EndpointControl
+from campus_ops.cyberbit import CyberbitAdapter
+from campus_ops.event_bus import EventBus, Subscription
+from campus_ops.evidence import EvidenceExporter
+from campus_ops.ioc_store import IocStore
+from campus_ops.models import Event, EventKind, Severity, WorkerState
+from campus_ops.response import ResponseEngine
+from campus_ops.state import LiveState
+from campus_ops.workers.application_intelligence import ApplicationIntelligenceWorker
+from campus_ops.workers.arp_guard import ArpGuardWorker
+from campus_ops.workers.asset_engine import AssetEngineWorker
+from campus_ops.workers.attack_timeline import AttackTimelineWorker
+from campus_ops.workers.beaconing import BeaconingWorker
+from campus_ops.workers.capture import CaptureWorker
+from campus_ops.workers.capture_health import CaptureHealthWorker
+from campus_ops.workers.detection import BehaviourDetectionWorker
+from campus_ops.workers.dns_intelligence import DnsIntelligenceWorker
+from campus_ops.workers.dos_warning import DosEarlyWarningWorker
+from campus_ops.workers.endpoint_deep_monitor import EndpointDeepMonitorWorker
+from campus_ops.workers.endpoint_identity import EndpointIdentityWorker
+from campus_ops.workers.flow_engine import FlowEngineWorker
+from campus_ops.workers.flow_receiver import FlowTelemetryReceiverWorker
+from campus_ops.workers.forensic_capture import ForensicCaptureWorker
+from campus_ops.workers.history import HistoryWorker
+from campus_ops.workers.identity_engine import IdentityEngineWorker
+from campus_ops.workers.incidents import IncidentCorrelationWorker
+from campus_ops.workers.infrastructure_intelligence import InfrastructureIntelligenceWorker
+from campus_ops.workers.ioc_matcher import IocMatcherWorker
+from campus_ops.workers.lateral_movement import LateralMovementWorker
+from campus_ops.workers.local_host import LocalHostTelemetryWorker
+from campus_ops.workers.malware import MalwareAnalysisWorker
 from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
+from campus_ops.workers.operations_watchdog import OperationsWatchdogWorker
+from campus_ops.workers.performance_engine import PerformanceEngineWorker
+from campus_ops.workers.pipeline_health import PipelineHealthWorker
+from campus_ops.workers.protocol_engine import ProtocolEngineWorker
+from campus_ops.workers.response_scheduler import ResponseSchedulerWorker
+from campus_ops.workers.risk_graph import RiskGraphWorker
+from campus_ops.workers.service_intelligence import ServiceIntelligenceWorker
+from campus_ops.workers.snmp_poller import SnmpPollerWorker
+from campus_ops.workers.stale_cleanup import StaleCleanupWorker
+from campus_ops.workers.state_sink import StateSinkWorker
+from campus_ops.workers.suricata_feed import SuricataFeedWorker
+from campus_ops.workers.syslog_receiver import SyslogReceiverWorker
+from campus_ops.workers.tcp_intelligence import TcpIntelligenceWorker
+from campus_ops.workers.telemetry import TelemetryWorker
+from campus_ops.workers.threat_engine import ThreatEngineWorker
 from campus_ops.workers.tool_probe import ToolProbeWorker
+from campus_ops.workers.topology_engine import TopologyEngineWorker
+from campus_ops.workers.traffic_baseline import TrafficBaselineWorker
+from campus_ops.workers.voice import VoiceAlertWorker
+from campus_ops.workers.wifi_telemetry import WifiTelemetryWorker
+from campus_ops.workers.windows_security import WindowsSecurityTelemetryWorker
 
 
 class Orchestrator:
+    """Single authority for workers, live sessions, endpoint agents and response control."""
+
+    OPTIONAL_DEGRADED_WORKERS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "suricata-feed",
+            "forensic-pcap",
+            "syslog-receiver",
+            "flow-telemetry-receiver",
+            "snmp-poller",
+            "wifi-telemetry",
+            "windows-security-telemetry",
+        }
+    )
+
     def __init__(self, settings: Settings = DEFAULT_SETTINGS) -> None:
         self.settings = settings
         self.bus = EventBus()
+        self.state = LiveState()
+        self.evidence = EvidenceExporter(self.state)
+        self.agents = AgentRegistry()
+        self.iocs = IocStore()
+        self.cyberbit = CyberbitAdapter()
         self.started_at: datetime | None = None
         self.session_id: str | None = None
+
         self.network = NetworkDiscoveryWorker(
             self.bus,
             interval=settings.network_poll_seconds,
@@ -24,28 +99,318 @@ class Orchestrator:
             confirmations=settings.interface_confirmations,
         )
         self.tools = ToolProbeWorker(self.bus, interval=settings.tool_probe_seconds)
-        self.workers = [self.network, self.tools]
+        self.state_sink = StateSinkWorker(self.bus, self.state)
+        self.history = HistoryWorker(self.bus)
+
+        self.protocol_engine = ProtocolEngineWorker(self.bus, self.state, self.get_session_id)
+        self.asset_engine = AssetEngineWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+            self.get_network_context,
+        )
+        self.flow_engine = FlowEngineWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+            self.get_network_context,
+        )
+        self.topology_engine = TopologyEngineWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+            self.get_network_context,
+        )
+        self.identity_engine = IdentityEngineWorker(self.bus, self.state, self.get_session_id)
+        self.endpoint_identity = EndpointIdentityWorker(
+            self.bus,
+            self.state,
+            self.agents,
+            self.get_session_id,
+        )
+        self.endpoint_deep_monitor = EndpointDeepMonitorWorker(
+            self.bus,
+            self.state,
+            self.agents,
+            self.get_session_id,
+            interval=3.0,
+        )
+        self.application_intelligence = ApplicationIntelligenceWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.dns_intelligence = DnsIntelligenceWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.service_intelligence = ServiceIntelligenceWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.infrastructure_intelligence = InfrastructureIntelligenceWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.tcp_intelligence = TcpIntelligenceWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.arp_guard = ArpGuardWorker(self.bus, self.get_session_id)
+        self.detection = BehaviourDetectionWorker(self.bus, self.state, self.get_session_id)
+        self.lateral_movement = LateralMovementWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.beaconing = BeaconingWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.dos_warning = DosEarlyWarningWorker(self.bus, self.get_session_id)
+        self.threat_engine = ThreatEngineWorker(self.bus, self.state, self.get_session_id)
+        self.ioc_matcher = IocMatcherWorker(
+            self.bus,
+            self.state,
+            self.iocs,
+            self.get_session_id,
+        )
+        self.traffic_baseline = TrafficBaselineWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.performance_engine = PerformanceEngineWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.incidents = IncidentCorrelationWorker(self.bus, self.state, self.get_session_id)
+        self.risk_graph = RiskGraphWorker(self.bus, self.state, self.get_session_id)
+        self.attack_timeline = AttackTimelineWorker(self.bus, self.state, self.get_session_id)
+
+        self.suricata = SuricataFeedWorker(self.bus, self.get_session_id)
+        self.malware = MalwareAnalysisWorker(self.bus, self.get_session_id)
+        self.telemetry = TelemetryWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+            self.get_interface,
+            interval=1.0,
+        )
+        self.local_host = LocalHostTelemetryWorker(self.bus, self.state, interval=3.0)
+        self.windows_security = WindowsSecurityTelemetryWorker(self.bus, self.state, interval=30.0)
+        self.wifi = WifiTelemetryWorker(self.bus, self.state, self.get_session_id)
+        self.syslog = SyslogReceiverWorker(self.bus, self.get_session_id)
+        self.flow_receiver = FlowTelemetryReceiverWorker(self.bus, self.get_session_id)
+        self.snmp = SnmpPollerWorker(self.bus, self.get_session_id)
+
+        self.stale_cleanup = StaleCleanupWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.capture_health = CaptureHealthWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
+        self.pipeline_health = PipelineHealthWorker(self.bus, self.state)
+        self.capture = CaptureWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+            self.get_interface,
+        )
+        self.forensic_capture = ForensicCaptureWorker(
+            self.bus,
+            self.get_session_id,
+            self.get_interface,
+        )
+        self.voice = VoiceAlertWorker(self.bus, self.get_session_id)
+
+        self.control = EndpointControl(self.bus, self.get_session_id)
+        self.response = ResponseEngine(self.bus, self.agents, self.get_session_id)
+        self.scheduler = ResponseSchedulerWorker(self.bus, self.response)
+        self.watchdog = OperationsWatchdogWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+            self.snapshot,
+            interval=2.0,
+        )
+
+        self.workers = [
+            self.state_sink,
+            self.history,
+            self.protocol_engine,
+            self.asset_engine,
+            self.flow_engine,
+            self.topology_engine,
+            self.identity_engine,
+            self.endpoint_identity,
+            self.endpoint_deep_monitor,
+            self.application_intelligence,
+            self.dns_intelligence,
+            self.service_intelligence,
+            self.infrastructure_intelligence,
+            self.tcp_intelligence,
+            self.arp_guard,
+            self.detection,
+            self.lateral_movement,
+            self.beaconing,
+            self.dos_warning,
+            self.threat_engine,
+            self.ioc_matcher,
+            self.traffic_baseline,
+            self.performance_engine,
+            self.incidents,
+            self.risk_graph,
+            self.attack_timeline,
+            self.suricata,
+            self.malware,
+            self.telemetry,
+            self.local_host,
+            self.windows_security,
+            self.wifi,
+            self.syslog,
+            self.flow_receiver,
+            self.snmp,
+            self.stale_cleanup,
+            self.capture_health,
+            self.pipeline_health,
+            self.scheduler,
+            self.voice,
+            self.watchdog,
+            self.tools,
+            self.network,
+            self.capture,
+            self.forensic_capture,
+        ]
+        self._session_task: asyncio.Task[None] | None = None
+        self._session_sub: Subscription | None = None
+
+    def get_session_id(self) -> str | None:
+        return self.session_id
+
+    def get_interface(self) -> str | None:
+        return self.network.selected.interface if self.network.selected else None
+
+    def get_network_context(self) -> dict[str, object] | None:
+        return asdict(self.network.selected) if self.network.selected else None
+
+    @staticmethod
+    def _fingerprint(current: dict[str, object]) -> str:
+        stable = {
+            "interface": current.get("interface"),
+            "ipv4": current.get("ipv4"),
+            "ipv6": current.get("ipv6"),
+            "prefixes": current.get("prefixes"),
+            "gateway": current.get("gateway"),
+            "default_route": current.get("default_route"),
+        }
+        raw = json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(raw).hexdigest()[:20]
+
+    async def _open_session(self, current: dict[str, object], change: str) -> None:
+        if self.session_id:
+            self.state.close_session()
+        self.session_id = str(uuid4())
+        fingerprint = self._fingerprint(current)
+        self.state.start_session(self.session_id, fingerprint)
+        interface = str(current.get("interface") or "network interface")
+        await self.bus.publish(
+            Event(
+                source="session-manager",
+                kind=EventKind.NETWORK,
+                session_id=self.session_id,
+                payload={
+                    "change": "LIVE_SESSION_STARTED",
+                    "reason": change,
+                    "current": current,
+                    "fingerprint": fingerprint,
+                    "voice": f"Monitoring session started on {interface}",
+                },
+            )
+        )
+
+    async def _close_session(self, reason: str) -> None:
+        old = self.session_id
+        if old is None:
+            return
+        await self.bus.publish(
+            Event(
+                source="session-manager",
+                kind=EventKind.NETWORK,
+                session_id=old,
+                severity=Severity.MEDIUM,
+                payload={
+                    "change": "LIVE_SESSION_CLOSING",
+                    "reason": reason,
+                    "voice": "Monitoring network disconnected. Live state cleared.",
+                },
+            )
+        )
+        await asyncio.sleep(0)
+        self.state.close_session()
+        self.session_id = None
+
+    async def _session_loop(self, sub: Subscription) -> None:
+        while True:
+            event = await sub.queue.get()
+            if event.source != "network-discovery" or event.kind != EventKind.NETWORK:
+                continue
+            change = str(event.payload.get("change") or "")
+            if change == "NETWORK_UNAVAILABLE":
+                await self._close_session(change)
+                continue
+            if change in {"INTERFACE_SELECTED", "INTERFACE_CHANGED", "NETWORK_IDENTITY_CHANGED"}:
+                current = event.payload.get("current")
+                if isinstance(current, dict):
+                    new_fingerprint = self._fingerprint(current)
+                    if new_fingerprint != self.state.network_fingerprint:
+                        await self._open_session(current, change)
 
     async def start(self) -> None:
         if self.started_at is not None:
             return
         self.started_at = datetime.now(UTC)
-        self.session_id = str(uuid4())
+        self._session_sub = await self.bus.subscribe("session-manager")
+        self._session_task = asyncio.create_task(
+            self._session_loop(self._session_sub),
+            name="session-manager",
+        )
         for worker in self.workers:
             await worker.start()
         await self.bus.publish(
             Event(
                 source="orchestrator",
-                kind=EventKind.SYSTEM,
-                session_id=self.session_id,
-                payload={"state": "STARTED"},
+                kind=EventKind.ACTION,
+                payload={
+                    "state": "STARTED",
+                    "message": "Live Operations Console started",
+                    "voice": "Welcome back.",
+                },
             )
         )
 
     async def stop(self) -> None:
+        await self._close_session("APPLICATION_STOP")
         for worker in reversed(self.workers):
             await worker.stop()
-        self.session_id = None
+        if self._session_task:
+            self._session_task.cancel()
+            try:
+                await self._session_task
+            except asyncio.CancelledError:
+                pass
+        if self._session_sub:
+            await self.bus.unsubscribe(self._session_sub.name)
         self.started_at = None
 
     def snapshot(self) -> dict[str, object]:
@@ -54,26 +419,45 @@ class Orchestrator:
                 "state": worker.health.state.value,
                 "detail": worker.health.detail,
                 "last_heartbeat": (
-                    worker.health.last_heartbeat.isoformat() if worker.health.last_heartbeat else None
+                    worker.health.last_heartbeat.isoformat()
+                    if worker.health.last_heartbeat
+                    else None
                 ),
                 "last_error": worker.health.last_error,
+                "optional": worker.name in self.OPTIONAL_DEGRADED_WORKERS,
             }
             for worker in self.workers
         }
+        core_workers = [
+            worker for worker in self.workers if worker.name not in self.OPTIONAL_DEGRADED_WORKERS
+        ]
         overall = "HEALTHY"
-        if any(worker.health.state == WorkerState.FAILED for worker in self.workers):
+        if any(worker.health.state == WorkerState.FAILED for worker in core_workers):
             overall = "FAILED"
-        elif any(worker.health.state == WorkerState.DEGRADED for worker in self.workers):
+        elif any(worker.health.state == WorkerState.DEGRADED for worker in core_workers):
             overall = "DEGRADED"
         return {
             "product": "Campus Cyber Operations Platform",
-            "version": "0.1.0",
-            "live_contract": "CURRENT_SESSION_ONLY",
+            "platform": platform.system(),
+            "version": "0.3.0",
             "overall": overall,
             "session_id": self.session_id,
             "started_at": self.started_at.isoformat() if self.started_at else None,
-            "network": asdict(self.network.selected) if self.network.selected else None,
+            "network": self.get_network_context(),
+            "network_candidates": [asdict(item) for item in self.network.candidates],
             "workers": worker_states,
             "tools": self.tools.statuses,
             "event_bus": self.bus.stats(),
+            "enrolled_endpoints": self.control.list(),
+            "managed_agents": self.agents.list(),
+            "ioc_watchlist": self.iocs.list(),
+            "response_jobs": self.agents.jobs(limit=100),
+            "scheduled_actions": self.scheduler.list(limit=100),
+            "cyberbit_configured": self.cyberbit.configured,
+            "evidence_root": str(self.forensic_capture.root),
+            "incident_bundle_root": str(self.evidence.root),
+            "malware_staging": str(self.malware.staging),
+            "voice": self.voice.status(),
+            "watchdog": self.watchdog.status(),
+            "live": self.state.snapshot(),
         }

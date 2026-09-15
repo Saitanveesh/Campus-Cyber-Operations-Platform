@@ -70,8 +70,10 @@ class NetworkCandidate:
     is_loopback: bool
     ipv4: tuple[str, ...] = ()
     ipv6: tuple[str, ...] = ()
+    prefixes: tuple[str, ...] = ()
     default_route: bool = False
     route_metric: int | None = None
+    gateway: str | None = None
     bytes_recv: int = 0
     bytes_sent: int = 0
     category: str = "unknown"
@@ -84,5 +86,7 @@ class SelectedNetwork:
     reasons: tuple[str, ...]
     ipv4: tuple[str, ...]
     ipv6: tuple[str, ...]
+    prefixes: tuple[str, ...]
     default_route: bool
     route_metric: int | None
+    gateway: str | None

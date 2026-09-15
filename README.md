@@ -1,49 +1,88 @@
-# Campus Cyber Operations Platform
+# Campus Cyber Operations Platform — Stable Monitor 0.4
 
-Windows-native cyber operations platform for authorized cyber-range and campus-lab environments.
+`monitor-v1` now defaults to a deliberately reduced monitoring runtime for authorized lab and campus networks.
 
-## Product direction
+## Why the runtime was simplified
 
-The platform unifies network visibility, protocol and flow intelligence, asset state, topology, performance, threat detection, malware analysis, incident correlation, endpoint control, evidence handling, and operator alerting behind one strict monochrome interface.
+Field testing exposed instability from running several independent packet/sensor pipelines at the same time. It also made the console overstate what was known about observed IP addresses. Stable 0.4 therefore follows three rules:
 
-### Frozen UI direction
+1. **One authoritative live packet source:** TShark.
+2. **Local assets require evidence:** an address is not promoted to the Assets inventory until it is observed repeatedly as a local source with a valid unicast MAC address.
+3. **Fewer consoles:** the production UI exposes only Overview, Network, Assets, Traffic, Security and System.
 
-Black / white / grey only. No colorful SOC theme. The UI is evidence-first and topology-centric.
+Zeek, Suricata, Falco, OpenCanary, SNMP, syslog, flow-export collectors, forensic capture and experimental enterprise consoles remain source-code experiments or legacy integrations. They are **not started by the stable Ubuntu runtime**.
 
-### Safety and trust model
+## Fresh Ubuntu install
 
-- Current-session-only live state. Historical state never silently appears as live.
-- Fail closed when capture, storage, API, or worker health is uncertain.
-- Remote host actions are only for explicitly enrolled/authorized lab systems.
-- All response actions are auditable and permission-gated.
-- Detections are evidence-backed indicators; the platform does not manufacture certainty.
+Use Ubuntu 22.04 or newer with systemd and an active Ethernet/Wi-Fi connection.
 
-## Foundation v1
+```bash
+sudo apt update
+sudo apt install -y git curl ca-certificates
+git clone --branch monitor-v1 --single-branch https://github.com/Saitanveesh/Campus-Cyber-Operations-Platform.git
+cd Campus-Cyber-Operations-Platform
+bash bootstrap.sh
+```
 
-This repository currently provides the product foundation:
+`bootstrap.sh` selects the stable Ubuntu installer automatically. It installs the managed Python runtime and TShark, configures Wireshark's capture helper permissions, disables old parallel managed sensors if they exist, installs the systemd service, waits for the HTTP console and runs the post-install check.
 
-- typed event model and in-process event bus
-- supervised worker runtime with health states
-- Windows-aware network auto-discovery worker
-- external-tool registry for Npcap/dumpcap/TShark/Suricata/YARA
-- unified orchestrator
-- FastAPI status surface
-- monochrome operator console shell
-- Windows CI tests
+Console: `http://127.0.0.1:8765`
 
-Future workers plug into the same contracts rather than becoming independent scripts.
+## Existing clone
+
+```bash
+cd ~/Campus-Cyber-Operations-Platform
+git checkout monitor-v1
+git pull --ff-only origin monitor-v1
+bash bootstrap.sh
+```
+
+## Stable runtime behavior
+
+The interface selector defaults to `auto`. The platform chooses an active routed physical interface and uses hysteresis before declaring a link unavailable, so a single transient poll does not destroy the session.
+
+The capture state has intentionally simple semantics:
+
+- `ACTIVE` — TShark is receiving packets.
+- `LINK_UP_IDLE` — capture process is healthy, but no packet arrived during the last interval.
+- `WAITING` — no confirmed active interface/session yet.
+- `ERROR` — TShark actually exited or could not open the interface.
+
+`LINK_UP_IDLE` is not an uplink failure.
+
+## Asset truth model
+
+The **Assets** page is local inventory, not a list of every IP seen in packet headers.
+
+An asset is admitted only when:
+
+- its address belongs to the selected local network, gateway or sensor identity;
+- the packet has a valid unicast source MAC; and
+- the same IP/MAC pair is observed in at least two source frames.
+
+Public Internet servers and off-subnet peers can appear in **Traffic** only when they were actually observed communicating with the local network. They are not promoted to local assets.
+
+## Verification
+
+```bash
+sudo systemctl status campus-ops.service --no-pager
+sudo /opt/campus-ops/venv/bin/python -m campus_ops.deployment_check
+curl -s http://127.0.0.1:8765/api/v1/live/status | python3 -m json.tool
+curl -s http://127.0.0.1:8765/api/v1/system/version | python3 -m json.tool
+```
+
+The version endpoint records the deployed branch, commit and stable runtime profile.
 
 ## Development
 
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e .[dev]
-python -m campus_ops
+```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/ruff check src tests
+.venv/bin/pytest -q
+CAMPUS_OPS_NO_BROWSER=1 .venv/bin/python -m campus_ops
 ```
 
-Open `http://127.0.0.1:8765`.
+## Scope
 
-## Planned worker families
-
-`capture` · `protocol` · `flow` · `asset` · `performance` · `topology` · `ids` · `behavior` · `malware` · `endpoint` · `response` · `incident` · `forensics` · `voice` · `storage` · `system-health`
+This is a passive monitoring console. It does not infer physical network paths, does not claim that every remote IP is a local device, and stable mode does not start automatic containment or multiple competing packet engines.

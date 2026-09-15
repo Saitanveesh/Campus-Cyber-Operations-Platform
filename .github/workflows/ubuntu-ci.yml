@@ -1,0 +1,104 @@
+name: ubuntu-ci
+on:
+  push:
+    branches: [monitor-v1, 'codex/ubuntu-*']
+  pull_request:
+    branches: [monitor-v1, main]
+
+concurrency:
+  group: ubuntu-ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install --no-deps -e .
+          python -m pip check
+      - name: Lint
+        run: ruff check src tests scripts/configure_ubuntu.py
+      - name: Validate installers and bootstrap
+        run: |
+          bash -n bootstrap.sh
+          bash -n scripts/install_ubuntu_stable.sh
+          bash -n scripts/install_kali.sh
+          bash -n scripts/wait_for_console.sh
+      - name: Tests
+        run: pytest -q
+
+  bootstrap:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install stable Ubuntu monitor
+        shell: bash
+        run: |
+          sudo bash scripts/install_ubuntu_stable.sh --interface auto
+          sudo systemctl restart campus-ops.service
+          sudo bash scripts/wait_for_console.sh --timeout 60
+          sudo /opt/campus-ops/venv/bin/python - <<'PY'
+          from campus_ops.deployment_check import check
+          report = check()
+          assert report['state'] == 'READY', report
+          assert report['profile'] == 'stable-single-source', report
+          assert report['capture']['verified'], report['capture']
+          assert report['capture']['backend'] == 'tshark', report['capture']
+          assert report['capture']['interface'] not in {None, 'any', 'lo'}, report['capture']
+          PY
+      - name: Verify parallel managed sensors are disabled
+        run: |
+          for unit in \
+            campus-ops-sensor@zeek.service \
+            campus-ops-sensor@suricata.service \
+            campus-ops-sensor@opencanary.service \
+            campus-ops-falco.service; do
+            if sudo systemctl is-active --quiet "$unit"; then
+              echo "$unit unexpectedly active"
+              exit 1
+            fi
+          done
+      - name: Verify stable live API
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request
+          with urllib.request.urlopen('http://127.0.0.1:8765/api/v1/live/status', timeout=5) as r:
+              status = json.load(r)
+          assert status['runtime_profile'] == 'stable-single-source', status
+          assert status['authoritative_packet_source'] == 'tshark', status
+          assert status['version'] == '0.4.0', status
+          PY
+      - name: Collect service diagnostics
+        if: always()
+        run: |
+          mkdir -p bootstrap-logs
+          sudo journalctl -u campus-ops.service --no-pager > bootstrap-logs/journal.txt || true
+          sudo cp -r /var/lib/campus-ops/install /etc/campus-ops/deployment.json bootstrap-logs/ 2>/dev/null || true
+          sudo chmod -R a+rX bootstrap-logs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bootstrap-${{ matrix.os }}
+          path: bootstrap-logs

@@ -1,0 +1,27 @@
+[Unit]
+Description=Campus Ops %i sensor supervisor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=campus-sensor
+Group=campus-ops
+Environment=PATH=/opt/zeek/bin:/opt/campus-ops/opencanary/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+EnvironmentFile=/etc/campus-ops/sensors.env
+ExecStart=/opt/campus-ops/venv/bin/python -m campus_ops.sensor_runner %i
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+KillMode=control-group
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=true
+UMask=0027
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/log/campus-ops /run/campus-ops-sensors
+
+[Install]
+WantedBy=multi-user.target
