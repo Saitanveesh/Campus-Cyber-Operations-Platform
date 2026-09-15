@@ -1,16 +1,17 @@
 ADMIN_LAYOUT_EXTENSION = r"""
 <style>
 #adminWorkspaceNav{gap:0!important}
-#adminWorkspaceNav .admin-secondary{display:none!important}
-#adminWorkspaceNav .admin-core{font-weight:700}
-#adminWorkspaceNav .admin-validation{background:#111!important;color:#fff!important}
-#adminWorkspaceNav .admin-validation.active{box-shadow:inset 0 -3px 0 #fff}
+/* Stronger selector than operator_refinement's generic tab rule: secondary consoles stay hidden. */
+#adminWorkspaceNav button.tab.admin-secondary{display:none!important}
+#adminWorkspaceNav button.tab.admin-core{font-weight:700}
+#adminWorkspaceNav button.tab.admin-validation{background:#111!important;color:#fff!important}
+#adminWorkspaceNav button.tab.admin-validation.active{box-shadow:inset 0 -3px 0 #fff}
 #adminAutonomy{margin-top:16px}.admin-autonomy-grid{display:grid;grid-template-columns:repeat(4,1fr);border-left:1px solid #c7c7c7;border-top:1px solid #c7c7c7}.admin-autonomy-grid>div{padding:11px;border-right:1px solid #c7c7c7;border-bottom:1px solid #c7c7c7}.admin-autonomy-grid strong{display:block;font-size:17px;margin-top:5px}.admin-auto-row{display:grid;grid-template-columns:minmax(130px,1fr) 70px 130px 130px;gap:8px;padding:8px 0;border-bottom:1px solid #ddd;font-size:10px}
 @media(max-width:900px){.admin-autonomy-grid{grid-template-columns:1fr 1fr}.admin-auto-row{grid-template-columns:1fr 70px 1fr}}
 </style>
 <script>
 (()=>{
-/* Four role-oriented workspaces replace overlapping feature consoles. */
+/* One canonical admin navigation. Feature-specific consoles remain available as internal views/shortcuts. */
 const CORE=['admin-command','admin-forensics','admin-red','admin-infra'];
 const SECONDARY=['admin-soc','admin-hunt','admin-deep','admin-ioc','admin-remote','admin-contain'];
 const NAMES={
@@ -25,10 +26,10 @@ function clean(){
  const sub=$('adminWorkspaceNav');if(!sub)return;
  for(const view of CORE){
    const b=sub.querySelector(`button.tab[data-view="${view}"]`)||document.querySelector(`button.tab[data-view="${view}"]`);
-   if(!b)continue;b.classList.add('admin-core');b.classList.remove('admin-secondary');if(NAMES[view])b.textContent=NAMES[view];if(view==='admin-red')b.classList.add('admin-validation');if(b.parentElement!==sub)sub.appendChild(b);
+   if(!b)continue;b.classList.add('admin-core');b.classList.remove('admin-secondary');if(NAMES[view]&&b.textContent!==NAMES[view])b.textContent=NAMES[view];if(view==='admin-red')b.classList.add('admin-validation');if(b.parentElement!==sub)sub.appendChild(b);
  }
- for(const view of SECONDARY){const b=document.querySelector(`button.tab[data-view="${view}"]`);if(b)b.classList.add('admin-secondary')}
- const label=sub.querySelector('.admin-nav-label');if(label)label.textContent='Admin';
+ for(const view of SECONDARY){const b=document.querySelector(`button.tab[data-view="${view}"]`);if(b){b.classList.add('admin-secondary');b.classList.remove('admin-core')}}
+ const label=sub.querySelector('.admin-nav-label');if(label&&label.textContent!=='Admin')label.textContent='Admin';
 }
 function installAutonomy(){
  const host=$('view-admin-command');if(!host||$('adminAutonomy'))return;
