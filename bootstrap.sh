@@ -36,14 +36,35 @@ git pull --ff-only origin "$BRANCH"
 
 invoking_user="${SUDO_USER:-${USER:-}}"
 info "Installing/repairing prerequisites and forcing automatic active-interface selection."
-sudo bash "$installer" --interface auto
+# The installer uses exit 2 for a PARTIAL deployment (for example an optional Falco
+# block or a capture check that still needs permission repair). Do not abort before
+# the repair stage; that was the previous bootstrap deadlock. Fatal installer errors
+# still stop immediately.
+installer_status=0
+sudo bash "$installer" --interface auto || installer_status=$?
+if [[ "$installer_status" -ne 0 && "$installer_status" -ne 2 ]]; then
+    fail "Installer stopped with fatal status $installer_status. See /var/lib/campus-ops/install/bootstrap.log"
+fi
+if [[ "$installer_status" -eq 2 ]]; then
+    info "Installer reported PARTIAL; continuing mandatory repair and final validation."
+fi
 
 info "Repairing and verifying packet-capture privileges for the service account."
 sudo bash scripts/repair_capture_permissions.sh --user "$invoking_user"
+
+# Ensure the just-pulled source is the code actually executing in /opt. The installer
+# normally performs this step, but an existing installation must never keep a stale
+# wheel after a branch update.
+info "Deploying the current monitor-v1 source into the managed virtual environment."
+sudo /opt/campus-ops/venv/bin/python -m pip install --force-reinstall --no-deps "$root"
+
+sudo systemctl daemon-reload
 sudo systemctl restart campus-ops.service
 
 info "Running post-install health check."
-if sudo /opt/campus-ops/venv/bin/python -m campus_ops.deployment_check; then
+health_status=0
+sudo /opt/campus-ops/venv/bin/python -m campus_ops.deployment_check || health_status=$?
+if [[ "$health_status" -eq 0 ]]; then
     info "Deployment check passed."
 else
     info "Deployment is running but one or more optional/core checks need attention; see the report above."
@@ -63,3 +84,7 @@ info "Console: $CONSOLE_URL"
 if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v xdg-open >/dev/null 2>&1; then
     (xdg-open "$CONSOLE_URL" >/dev/null 2>&1 &) || true
 fi
+
+# A PARTIAL optional integration should not block use of the console, but an unhealthy
+# core capture path remains visible in the final deployment report above.
+exit 0
