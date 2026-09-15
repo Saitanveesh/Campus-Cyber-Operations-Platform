@@ -46,3 +46,10 @@ class StableOrchestrator(Orchestrator):
             self.dos_warning,
             self.incidents,
         ]
+
+    def snapshot(self) -> dict[str, object]:
+        result = super().snapshot()
+        result["version"] = "0.4.0"
+        result["runtime_profile"] = "stable-single-source"
+        result["authoritative_packet_source"] = "tshark"
+        return result
