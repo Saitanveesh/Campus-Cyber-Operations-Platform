@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import os
+from collections import deque
 
 from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, WorkerState
@@ -11,23 +12,69 @@ from campus_ops.tooling.registry import resolve_executable
 from campus_ops.workers.base import BaseWorker
 
 FIELDS = (
-    "frame.len", "frame.protocols", "eth.src", "eth.dst", "eth.src.oui_resolved",
-    "eth.dst.oui_resolved", "vlan.id", "ip.src", "ip.dst", "ip.ttl", "ipv6.src",
-    "ipv6.dst", "ipv6.hlim", "arp.src.proto_ipv4", "tcp.srcport", "tcp.dstport",
-    "tcp.flags", "tcp.window_size_value", "tcp.analysis.ack_rtt",
-    "tcp.analysis.retransmission", "tcp.analysis.fast_retransmission",
-    "tcp.analysis.duplicate_ack", "tcp.analysis.lost_segment", "tcp.analysis.out_of_order",
-    "udp.srcport", "udp.dstport", "icmp.type", "icmpv6.type", "_ws.col.Protocol",
-    "dns.qry.name", "dns.flags.response", "dns.flags.rcode", "dns.a", "dns.aaaa",
-    "tls.handshake.extensions_server_name", "tls.handshake.type", "tls.handshake.version",
-    "http.host", "dhcp.option.hostname", "dhcp.option.dhcp_server_id", "dhcp.option.dhcp",
-    "lldp.chassis.id", "lldp.port.id", "lldp.system.name",
+    "frame.len",
+    "frame.protocols",
+    "eth.src",
+    "eth.dst",
+    "eth.src.oui_resolved",
+    "eth.dst.oui_resolved",
+    "vlan.id",
+    "ip.src",
+    "ip.dst",
+    "ip.ttl",
+    "ipv6.src",
+    "ipv6.dst",
+    "ipv6.hlim",
+    "arp.src.proto_ipv4",
+    "tcp.srcport",
+    "tcp.dstport",
+    "tcp.flags",
+    "tcp.window_size_value",
+    "tcp.analysis.ack_rtt",
+    "tcp.analysis.retransmission",
+    "tcp.analysis.fast_retransmission",
+    "tcp.analysis.duplicate_ack",
+    "tcp.analysis.lost_segment",
+    "tcp.analysis.out_of_order",
+    "udp.srcport",
+    "udp.dstport",
+    "icmp.type",
+    "icmpv6.type",
+    "_ws.col.Protocol",
+    "dns.qry.name",
+    "dns.flags.response",
+    "dns.flags.rcode",
+    "dns.a",
+    "dns.aaaa",
+    "tls.handshake.extensions_server_name",
+    "tls.handshake.type",
+    "tls.handshake.version",
+    "http.host",
+    "dhcp.option.hostname",
+    "dhcp.option.dhcp_server_id",
+    "dhcp.option.dhcp",
+    "lldp.chassis.id",
+    "lldp.port.id",
+    "lldp.system.name",
 )
 SPECIAL_FIELDS = frozenset({"_ws.col.Protocol"})
 FALLBACK_FIELDS = (
-    "frame.len", "frame.protocols", "eth.src", "eth.dst", "ip.src", "ip.dst",
-    "ipv6.src", "ipv6.dst", "arp.src.proto_ipv4", "tcp.srcport", "tcp.dstport",
-    "tcp.flags", "udp.srcport", "udp.dstport", "_ws.col.Protocol", "dns.qry.name",
+    "frame.len",
+    "frame.protocols",
+    "eth.src",
+    "eth.dst",
+    "ip.src",
+    "ip.dst",
+    "ipv6.src",
+    "ipv6.dst",
+    "arp.src.proto_ipv4",
+    "tcp.srcport",
+    "tcp.dstport",
+    "tcp.flags",
+    "udp.srcport",
+    "udp.dstport",
+    "_ws.col.Protocol",
+    "dns.qry.name",
     "tls.handshake.extensions_server_name",
 )
 
@@ -35,13 +82,12 @@ FALLBACK_FIELDS = (
 class CaptureWorker(BaseWorker):
     """Single-source passive packet metadata capture.
 
-    TShark is the only capture/decoder process managed by the application. On Linux,
-    Wireshark's dumpcap helper remains an implementation detail of TShark and receives
-    its normal file capabilities from the installer. On Windows, TShark uses Npcap.
+    TShark is the only capture/decoder process managed by MON. A healthy process stays
+    ACTIVE even when the wire is quiet. Packet silence is traffic activity, not link
+    health, and therefore never changes the capture state or triggers a rebind.
 
-    Deliberately omitted: tcpdump fallback, multi-backend failover and automatic
-    busy-link rebinding. Those mechanisms made link health oscillate in real ranges.
-    A quiet link is IDLE, not a failure; a process exit is retried after a fixed delay.
+    On Linux, Wireshark's dumpcap helper is only TShark's internal privilege helper.
+    On Windows, TShark uses Npcap. MON does not run a second capture engine.
     """
 
     def __init__(self, bus: EventBus, state: LiveState, session_provider, interface_provider) -> None:
@@ -50,23 +96,53 @@ class CaptureWorker(BaseWorker):
         self.session_provider = session_provider
         self.interface_provider = interface_provider
         self._process: asyncio.subprocess.Process | None = None
+        self._stderr_task: asyncio.Task[None] | None = None
+        self._stderr_lines: deque[str] = deque(maxlen=30)
         self._bound: tuple[str, str] | None = None
         self.active_fields: tuple[str, ...] = FALLBACK_FIELDS
         self._capture_candidates: list[str] = []
         self._candidate_index = 0
 
+    async def _drain_stderr(self, process: asyncio.subprocess.Process) -> None:
+        if process.stderr is None:
+            return
+        try:
+            while True:
+                raw = await process.stderr.readline()
+                if not raw:
+                    return
+                text = raw.decode(errors="replace").strip()
+                if text:
+                    self._stderr_lines.append(text)
+        except asyncio.CancelledError:
+            raise
+        except (OSError, ValueError):
+            return
+
+    async def _stop_stderr_task(self) -> None:
+        task = self._stderr_task
+        self._stderr_task = None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     async def _terminate(self) -> None:
         process = self._process
         self._process = None
         self._bound = None
-        if process is None or process.returncode is not None:
-            return
-        process.terminate()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=3.0)
-        except TimeoutError:
-            process.kill()
-            await process.wait()
+        if process is not None and process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=3.0)
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+        await self._stop_stderr_task()
 
     async def stop(self) -> None:
         await self._terminate()
@@ -76,7 +152,10 @@ class CaptureWorker(BaseWorker):
         if os.name != "nt":
             return [requested]
         process = await asyncio.create_subprocess_exec(
-            tshark, "-D", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+            tshark,
+            "-D",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
         )
         stdout, _ = await process.communicate()
         requested_lower = requested.casefold().strip()
@@ -100,7 +179,10 @@ class CaptureWorker(BaseWorker):
 
     async def _discover_fields(self, tshark: str) -> tuple[str, ...]:
         process = await asyncio.create_subprocess_exec(
-            tshark, "-G", "fields", stdout=asyncio.subprocess.PIPE,
+            tshark,
+            "-G",
+            "fields",
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
         try:
@@ -142,21 +224,21 @@ class CaptureWorker(BaseWorker):
 
     def _command(self, tshark: str, capture_device: str) -> list[str]:
         command = [
-            tshark, "-l", "-n", "-i", capture_device,
-            "-T", "fields", "-E", "separator=\t", "-E", "occurrence=f",
+            tshark,
+            "-l",
+            "-n",
+            "-i",
+            capture_device,
+            "-T",
+            "fields",
+            "-E",
+            "separator=\t",
+            "-E",
+            "occurrence=f",
         ]
         for field in self.active_fields:
             command.extend(["-e", field])
         return command
-
-    async def _stderr_tail(self, process: asyncio.subprocess.Process, limit: int = 900) -> str:
-        if process.stderr is None:
-            return ""
-        try:
-            raw = await asyncio.wait_for(process.stderr.read(), timeout=1.0)
-        except TimeoutError:
-            return ""
-        return raw.decode(errors="replace").strip()[-limit:]
 
     async def _start_capture(self, tshark: str, interface: str, session_id: str) -> None:
         await self._terminate()
@@ -164,6 +246,7 @@ class CaptureWorker(BaseWorker):
         if not self._capture_candidates:
             raise RuntimeError(f"TShark could not resolve capture interface {interface}")
         capture_device = self._capture_candidates[self._candidate_index % len(self._capture_candidates)]
+        self._stderr_lines.clear()
         try:
             process = await asyncio.create_subprocess_exec(
                 *self._command(tshark, capture_device),
@@ -172,12 +255,21 @@ class CaptureWorker(BaseWorker):
             )
         except OSError as exc:
             raise RuntimeError(f"TShark could not start: {exc}") from exc
-        await asyncio.sleep(0.35)
+
+        await asyncio.sleep(0.5)
         if process.returncode is not None:
-            detail = await self._stderr_tail(process)
+            detail = ""
+            if process.stderr is not None:
+                raw = await process.stderr.read()
+                detail = raw.decode(errors="replace").strip()[-1200:]
             raise RuntimeError(detail or f"TShark exited with code {process.returncode}")
+
         self._process = process
         self._bound = (session_id, interface)
+        self._stderr_task = asyncio.create_task(
+            self._drain_stderr(process),
+            name=f"tshark-stderr-{process.pid}",
+        )
         self.health.state = WorkerState.HEALTHY
         self.state.set_capture(
             state="ACTIVE",
@@ -188,8 +280,33 @@ class CaptureWorker(BaseWorker):
             process_pid=process.pid,
             started_at=dt.datetime.now(dt.UTC).isoformat(),
             decoder_fields=len(self.active_fields),
-            detail=f"capturing on {interface} via tshark",
+            traffic_activity="STARTING",
+            detail=f"capture active on {interface} via tshark",
         )
+
+    async def _mark_process_exit(self, process: asyncio.subprocess.Process, interface: str) -> None:
+        code = await process.wait()
+        if self._stderr_task is not None and not self._stderr_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(self._stderr_task), timeout=0.5)
+            except TimeoutError:
+                pass
+        detail = " | ".join(self._stderr_lines)[-1200:]
+        message = f"TShark exited with code {code}"
+        if detail:
+            message += f": {detail}"
+        self.state.set_capture(
+            state="ERROR",
+            interface=interface,
+            backend="tshark",
+            traffic_activity="STOPPED",
+            detail=message[-1400:],
+        )
+        self.health.state = WorkerState.DEGRADED
+        self.health.heartbeat(message[-800:])
+        self._process = None
+        self._bound = None
+        await self._stop_stderr_task()
 
     async def run(self) -> None:
         tshark = await self._wait_for_tshark()
@@ -209,6 +326,7 @@ class CaptureWorker(BaseWorker):
                     state="WAITING",
                     interface=interface,
                     backend="tshark",
+                    traffic_activity="NONE",
                     detail="waiting for a confirmed active network interface",
                 )
                 self.health.heartbeat("waiting for network")
@@ -222,12 +340,19 @@ class CaptureWorker(BaseWorker):
                 last_binding = binding
 
             if self._bound != binding or self._process is None or self._process.returncode is not None:
+                if self._process is not None and self._process.returncode is not None:
+                    await self._mark_process_exit(self._process, interface)
+                    await asyncio.sleep(5)
                 try:
                     await self._start_capture(tshark, interface, session_id)
                 except RuntimeError as exc:
                     detail = str(exc)
                     self.state.set_capture(
-                        state="ERROR", interface=interface, backend="tshark", detail=detail
+                        state="ERROR",
+                        interface=interface,
+                        backend="tshark",
+                        traffic_activity="STOPPED",
+                        detail=detail,
                     )
                     self.health.state = WorkerState.DEGRADED
                     self.health.heartbeat(detail)
@@ -237,19 +362,28 @@ class CaptureWorker(BaseWorker):
             process = self._process
             assert process is not None and process.stdout is not None
             try:
-                raw = await asyncio.wait_for(process.stdout.readline(), timeout=3.0)
+                raw = await asyncio.wait_for(process.stdout.readline(), timeout=5.0)
             except TimeoutError:
                 if self._bound != (self.session_provider(), self.interface_provider()):
+                    await self._terminate()
                     continue
+                if process.returncode is not None:
+                    await self._mark_process_exit(process, interface)
+                    await asyncio.sleep(5)
+                    continue
+
+                # This is the critical stability rule: a quiet interval does not alter
+                # capture/link state and does not restart TShark. The process is alive,
+                # therefore capture remains ACTIVE. Traffic activity is informational.
                 self.state.set_capture(
-                    state="LINK_UP_IDLE",
+                    state="ACTIVE",
                     interface=interface,
                     backend="tshark",
-                    decoder_fields=len(self.active_fields),
-                    detail="capture process is healthy; no packet arrived during the last interval",
+                    traffic_activity="QUIET",
+                    detail=f"capture active on {interface} via tshark",
                 )
                 self.health.state = WorkerState.HEALTHY
-                self.health.heartbeat(f"capture idle on {interface}")
+                self.health.heartbeat(f"capture process healthy on {interface}; traffic quiet")
                 continue
 
             if self._bound != (self.session_provider(), self.interface_provider()):
@@ -257,18 +391,7 @@ class CaptureWorker(BaseWorker):
                 continue
 
             if not raw:
-                code = await process.wait()
-                detail = await self._stderr_tail(process)
-                message = f"TShark exited with code {code}"
-                if detail:
-                    message += f": {detail}"
-                self.state.set_capture(
-                    state="ERROR", interface=interface, backend="tshark", detail=message[-1400:]
-                )
-                self.health.state = WorkerState.DEGRADED
-                self.health.heartbeat(message[-800:])
-                self._process = None
-                self._bound = None
+                await self._mark_process_exit(process, interface)
                 await asyncio.sleep(5)
                 continue
 
@@ -297,8 +420,9 @@ class CaptureWorker(BaseWorker):
                 last_packet_at=dt.datetime.now(dt.UTC).isoformat(),
                 state="ACTIVE",
                 backend="tshark",
+                traffic_activity="PACKETS",
                 decoder_fields=len(self.active_fields),
-                detail=f"capturing on {interface} via tshark",
+                detail=f"capture active on {interface} via tshark",
             )
 
             await self.bus.publish(
