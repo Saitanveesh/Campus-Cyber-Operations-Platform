@@ -8,16 +8,38 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+
+# Runtime/evidence must never become source-control history.
 runtime/
 data/live/
 data/evidence/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite3
 *.pcap
 *.pcapng
+*.evtx
+*.dmp
+*.har
 *.log
+
+# Local configuration, credentials and cryptographic material.
 .env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.token
+credentials*.json
+
+# Editor/OS noise.
 .vscode/
 .idea/
 Thumbs.db
