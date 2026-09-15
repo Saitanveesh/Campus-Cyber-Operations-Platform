@@ -57,6 +57,29 @@ sudo bash scripts/repair_capture_permissions.sh --user "$invoking_user"
 info "Deploying the current monitor-v1 source into the managed virtual environment."
 sudo /opt/campus-ops/venv/bin/python -m pip install --force-reinstall --no-deps "$root"
 
+# Persist immutable deployment provenance. Operators can prove exactly which branch and
+# commit produced the running service instead of relying on a browser label or memory.
+build_commit="$(git rev-parse HEAD)"
+build_branch="$(git branch --show-current)"
+build_installed_at="$(date --utc +%Y-%m-%dT%H:%M:%SZ)"
+build_dirty=false
+if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    build_dirty=true
+fi
+sudo install -d -m 0750 -o root -g campus-ops /etc/campus-ops
+build_tmp="$(mktemp)"
+cat > "$build_tmp" <<EOF
+{
+  "branch": "$build_branch",
+  "commit": "$build_commit",
+  "installed_at": "$build_installed_at",
+  "source_dirty": $build_dirty
+}
+EOF
+sudo install -m 0640 -o root -g campus-ops "$build_tmp" /etc/campus-ops/build.json
+rm -f "$build_tmp"
+info "Build provenance: $build_branch @ ${build_commit:0:12}"
+
 sudo systemctl daemon-reload
 sudo systemctl restart campus-ops.service
 
