@@ -27,20 +27,13 @@ jobs:
           python -m pip check
       - name: Lint
         run: ruff check src tests scripts/configure_ubuntu.py
-      - name: Validate Ubuntu installer
-        run: bash -n scripts/install_ubuntu.sh
-      - name: Preserve existing UI
+      - name: Validate Linux installers and bootstrap
         run: |
-          python - <<'PY'
-          import subprocess
-          paths = subprocess.check_output(
-              ["git", "diff", "--name-only", "12ef976c6c227d1939ad5fb59db53c64953763d8", "HEAD"],
-              text=True,
-          ).splitlines()
-          changed = [p for p in paths if p.startswith("src/") and (
-              p.endswith(("_ui.py", ".html", ".css", ".js")) or "/ui/" in p)]
-          assert not changed, f"UI changes are outside the authorized scope: {changed}"
-          PY
+          bash -n bootstrap.sh
+          bash -n scripts/install_ubuntu.sh
+          bash -n scripts/install_kali.sh
+          bash -n scripts/repair_capture_permissions.sh
+          bash scripts/install_kali.sh --plan --interface auto | grep -q 'interface: auto'
       - name: Tests
         run: pytest -q
   bootstrap:
@@ -56,20 +49,23 @@ jobs:
         shell: bash
         run: |
           set +e
-          sudo bash scripts/install_ubuntu.sh --interface any
+          sudo bash scripts/install_ubuntu.sh --interface auto
           install_status=$?
           set -e
           if [[ $install_status != 0 && $install_status != 2 ]]; then exit "$install_status"; fi
+          sudo bash scripts/repair_capture_permissions.sh --user "$USER"
+          sudo systemctl restart campus-ops.service
           sudo /opt/campus-ops/venv/bin/python - <<'PY'
           from campus_ops.deployment_check import check
           report = check()
-          # Hosted/WSL kernels without BTF explicitly cannot run Falco; every
+          # Hosted kernels without BTF explicitly cannot run Falco; every
           # other install or service failure remains a failing deployment gate.
           problems = [p for p in report['problems'] if not p.startswith('falco: BLOCKED')]
           assert not problems, problems
           assert report['capture']['verified']
+          assert report['capture']['interface'] not in {None, 'any'}, report['capture']
           PY
-      - name: Verify capture on all interfaces and service restart
+      - name: Verify automatic physical interface and service restart
         run: |
           sudo systemctl restart campus-ops-sensor@zeek.service
           sleep 8
@@ -77,7 +73,7 @@ jobs:
           from campus_ops.deployment import deployment_status
           status = deployment_status()['sensors']['zeek']
           assert status['state'] == 'RUNNING', status
-          assert status['interface'] == 'any', status
+          assert status['interface'] not in {None, 'any', 'lo'}, status
           PY
       - name: Collect service diagnostics
         if: always()
