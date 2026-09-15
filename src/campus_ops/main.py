@@ -32,6 +32,7 @@ from campus_ops.operational_readiness import install_operational_readiness
 from campus_ops.operator_refinement import install_operator_refinement
 from campus_ops.red_panel import install_red_panel
 from campus_ops.runtime_ui import install_runtime_extensions
+from campus_ops.version_api import install_version_api
 from campus_ops.zeek_integration import install_zeek_integration
 
 
@@ -81,6 +82,7 @@ def build_app():
     app = install_autonomy_engine(app)
     app = install_operational_readiness(app)
     app = install_link_state(app)
+    app = install_version_api(app)
     app = install_red_panel(app)
     if startup_handlers or shutdown_handlers:
         original_lifespan = app.router.lifespan_context
