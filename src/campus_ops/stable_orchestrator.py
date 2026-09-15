@@ -7,11 +7,9 @@ from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
 class StableOrchestrator(Orchestrator):
     """Reduced runtime used by monitor-v1 stable mode.
 
-    One external telemetry source is authoritative: TShark packet metadata. Everything
-    else in this worker list is an in-process derivation of those packets or local link
-    counters. External feeds, additional packet engines, endpoint agents, voice,
-    forensics, SNMP/syslog/flow collectors and autonomous response workers are not
-    started in stable mode.
+    TShark remains the only external live packet source. The UI may expose multiple
+    views, but topology, flows, assets and security are deterministic in-process
+    derivations of the same packet stream; they are not additional capture pipelines.
     """
 
     OPTIONAL_DEGRADED_WORKERS = frozenset()
@@ -44,6 +42,7 @@ class StableOrchestrator(Orchestrator):
             self.protocol_engine,
             self.asset_engine,
             self.flow_engine,
+            self.topology_engine,
             self.application_intelligence,
             self.dns_intelligence,
             self.service_intelligence,
@@ -62,9 +61,10 @@ class StableOrchestrator(Orchestrator):
 
     def snapshot(self) -> dict[str, object]:
         result = super().snapshot()
-        result["version"] = "0.4.1"
+        result["version"] = "0.4.2"
         result["runtime_profile"] = "stable-single-source"
         result["authoritative_packet_source"] = "tshark"
         result["link_loss_confirmations"] = 5
         result["capture_state_policy"] = "process-health-only"
+        result["topology_source"] = "same-tshark-packet-stream"
         return result
