@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from campus_ops.orchestrator import Orchestrator
+from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
 
 
 class StableOrchestrator(Orchestrator):
@@ -20,6 +21,17 @@ class StableOrchestrator(Orchestrator):
             super().__init__()
         else:
             super().__init__(settings)
+
+        # Cyber-range links can momentarily disappear from one discovery poll while
+        # NetworkManager, DHCP or a virtual switch updates state. Stable mode requires
+        # five consecutive misses before it tears down the live session.
+        self.network = NetworkDiscoveryWorker(
+            self.bus,
+            interval=self.settings.network_poll_seconds,
+            switch_margin=self.settings.interface_switch_margin,
+            confirmations=self.settings.interface_confirmations,
+            unavailable_confirmations=5,
+        )
 
         self.workers = [
             # Authoritative state + one network/capture path.
@@ -52,4 +64,5 @@ class StableOrchestrator(Orchestrator):
         result["version"] = "0.4.0"
         result["runtime_profile"] = "stable-single-source"
         result["authoritative_packet_source"] = "tshark"
+        result["link_loss_confirmations"] = 5
         return result
