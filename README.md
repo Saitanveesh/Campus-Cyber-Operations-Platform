@@ -1,39 +1,26 @@
-# Campus Cyber Operations Platform — Stable Monitor 0.4.2
+# Campus Cyber Operations Platform — MON Stable 0.5.0
 
-`monitor-v1` is the stabilized monitoring runtime for authorized lab and campus networks.
+`monitor-v1` is the field-stable passive monitoring profile. The repository has been reduced to one packet acquisition path and one runtime model so old sensor, agent, response and enterprise experiments cannot be loaded accidentally.
 
 ## Runtime contract
 
-Stable MON is built around one acquisition chain:
+MON Stable 0.5.0 has one authoritative packet source: **TShark**. Automatic interface selection chooses one eligible active interface and uses confirmation/hysteresis before changing it. The live session, Assets, Traffic, Topology, Path Space and Security views are all derived from that same packet stream.
 
-1. **One authoritative live packet source:** TShark.
-2. **One selected monitoring interface:** automatic selection prefers the active routed network and uses confirmation/hysteresis before changing it.
-3. **One live monitoring session:** short interface observations do not immediately destroy the session.
-4. **Evidence-backed state:** local assets require repeated local source-frame evidence with a valid unicast MAC address.
-5. **Derived views, not extra capture engines:** Topology, Path Space, Assets, Traffic and Security are computed from the same TShark packet stream.
+Local Assets require repeated local source-frame evidence with a valid unicast source MAC. A remote address seen in a packet may appear as an observed traffic peer, but it is not promoted to a local asset.
 
-Zeek, Suricata, Falco, OpenCanary, SNMP, syslog, flow-export collectors and the older experimental enterprise consoles are **not started by the stable Ubuntu runtime**.
+The stable runtime does not mount agent control, remote shell, quarantine/isolation, active network probing, Zeek, Suricata, Falco, OpenCanary, NetFlow, SNMP, syslog, voice, malware scanning, endpoint telemetry or the former enterprise/admin console stack.
 
-## Stable console
+## Console
 
-The primary navigation exposes:
+Primary navigation:
 
-- Overview
-- Network
-- Topology
-- Path Space
-- Assets
-- Traffic
-- Security
-- Investigation
-- Forensics
-- System
+`Overview · Network · Topology · Path Space · Assets · Traffic · Security · Investigation · Forensics · System`
 
-There is no separate **Admin** panel in stable mode. **Investigation** and **Forensics** are first-class protected workspaces in the normal navigation. They require a local-console operator sign-in and expose passive target/evidence functions only. The stable operator API does not mount active probe, remote-console or containment endpoints from the legacy admin console.
+Investigation and Forensics are local authenticated passive-evidence workspaces. There is no Admin panel and no active-response control surface in the stable application.
 
-## Fresh Ubuntu install
+## Install
 
-Use Ubuntu 22.04 or newer with systemd and an active network connection. For the normal direct-LAN deployment, leave interface selection on `auto`.
+Ubuntu 22.04+:
 
 ```bash
 sudo apt update
@@ -43,51 +30,35 @@ cd Campus-Cyber-Operations-Platform
 bash bootstrap.sh
 ```
 
-`bootstrap.sh` selects the stable Ubuntu installer automatically. It installs the managed Python runtime and TShark, configures Wireshark/dumpcap capture permissions, disables old parallel managed sensors if they exist, installs the systemd service, waits for the real MON capture runtime to become ready, and runs the post-install deployment check.
+Kali Linux uses the same stable single-source runtime:
+
+```bash
+git clone --branch monitor-v1 --single-branch https://github.com/Saitanveesh/Campus-Cyber-Operations-Platform.git
+cd Campus-Cyber-Operations-Platform
+bash bootstrap.sh
+```
+
+On every install/upgrade, MON recreates `/opt/campus-ops/venv` instead of reusing the old Python environment. The installer also removes stale multi-sensor configuration and disables/removes old MON sensor service units before starting the current service.
 
 Console: `http://127.0.0.1:8765`
 
-## Existing clone
+## Update an existing machine
 
 ```bash
 cd ~/Campus-Cyber-Operations-Platform
 git checkout monitor-v1
+git fetch origin
 git pull --ff-only origin monitor-v1
 bash bootstrap.sh
 ```
 
-## Interface selection and session stability
+## Capture state
 
-The interface selector defaults to `auto`. MON detects the active network interface and requires repeated confirmation before switching interfaces or accepting a material network-identity change. Stable mode also requires multiple consecutive missing/down observations before declaring the network unavailable.
+`ACTIVE` means the managed TShark process is alive and bound to the selected interface. Quiet traffic keeps capture `ACTIVE` and changes only `traffic_activity` to `QUIET`. `WAITING` means no confirmed interface/session exists yet. `UNAVAILABLE` means TShark cannot be resolved. `ERROR` means the actual managed TShark process failed.
 
-This prevents a single NetworkManager/DHCP/routing observation from resetting the session or restarting TShark.
+This prevents normal quiet periods from appearing as capture/link failures.
 
-An explicitly selected interface can still be configured when a lab requires it, but `auto` is the normal deployment setting.
-
-## Capture-state semantics
-
-Capture state is based on the actual TShark process, not on packet arrival rate:
-
-- `ACTIVE` — the managed TShark process is alive and bound to the selected interface.
-- `WAITING` — there is not yet a confirmed interface/session to bind.
-- `UNAVAILABLE` — TShark is not installed/resolvable.
-- `ERROR` — the managed TShark process exited, could not start, or its output stream failed.
-
-When the wire is quiet, capture remains `ACTIVE` and `traffic_activity` becomes `QUIET`. Packet silence does **not** trigger an interface rebind, session reset or false link failure.
-
-## Asset truth model
-
-The **Assets** page is local inventory, not a list of every IP appearing in packet headers.
-
-An asset is admitted only when:
-
-- its address belongs to the selected local network, gateway or sensor identity;
-- the packet has a valid unicast source MAC; and
-- the same IP/MAC pair is observed in at least two source frames.
-
-Public Internet servers and off-subnet peers can appear in **Traffic** only when they were actually observed communicating with the local network. They are not promoted to local assets.
-
-## Verification
+## Verify
 
 ```bash
 sudo systemctl status campus-ops.service --no-pager
@@ -96,7 +67,7 @@ curl -s http://127.0.0.1:8765/api/v1/live/status | python3 -m json.tool
 curl -s http://127.0.0.1:8765/api/v1/system/version | python3 -m json.tool
 ```
 
-A deployment is ready only when the managed service, network-discovery worker, capture worker, selected interface and the actual managed TShark PID agree. The version endpoint records the deployed branch, commit and stable runtime profile.
+A ready deployment requires an active session, selected interface, healthy network-discovery and capture workers, a live TShark PID, matching network/capture interface, and the required Linux capture capabilities.
 
 ## Development
 
@@ -108,8 +79,6 @@ python3.12 -m venv .venv
 CAMPUS_OPS_NO_BROWSER=1 .venv/bin/python -m campus_ops
 ```
 
-## Visibility scope
+## Visibility boundary
 
-MON reports what reaches its capture interface. A normal switched access port does not automatically receive every unicast conversation on the LAN. Monitoring other hosts' traffic therefore depends on sensor placement such as a SPAN/mirror port, TAP, bridge/gateway position, or another legitimate telemetry source.
-
-The stable console does not infer physical switch/router hops unless infrastructure evidence supports them, and it does not treat every observed remote IP as a local device.
+MON can report only traffic visible to its capture interface. On a switched network, a normal access port normally does not receive all other hosts' unicast traffic. Wider passive visibility requires legitimate sensor placement such as a SPAN/mirror port, TAP or gateway/bridge position. MON does not invent physical switch/router hops that it cannot observe.
