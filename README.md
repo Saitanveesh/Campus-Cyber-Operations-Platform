@@ -1,84 +1,179 @@
-# Campus Cyber Operations Platform — MON Stable 0.5.0
+# MON Windows 1.0
 
-`monitor-v1` is the field-stable passive monitoring profile. The repository has been reduced to one packet acquisition path and one runtime model so old sensor, agent, response and enterprise experiments cannot be loaded accidentally.
+Native Windows network monitoring sensor and operator console for schools, colleges and small campus environments.
 
-## Runtime contract
+Branch: `windows-native-v2`
 
-MON Stable 0.5.0 has one authoritative packet source: **TShark**. Automatic interface selection chooses one eligible active interface and uses confirmation/hysteresis before changing it. The live session, Assets, Traffic, Topology, Path Space and Security views are all derived from that same packet stream.
+## Product contract
 
-Local Assets require repeated local source-frame evidence with a valid unicast source MAC. A remote address seen in a packet may appear as an observed traffic peer, but it is not promoted to a local asset.
+MON Windows is deliberately narrow and evidence-driven:
 
-The stable runtime does not mount agent control, remote shell, quarantine/isolation, active network probing, Zeek, Suricata, Falco, OpenCanary, NetFlow, SNMP, syslog, voice, malware scanning, endpoint telemetry or the former enterprise/admin console stack.
+- Native Windows only. Do not run it in WSL.
+- One packet source: **TShark through Npcap**.
+- One elected Windows Wi-Fi/Ethernet adapter per monitoring session.
+- Assets, flows, topology, security conditions and investigations come from the same packet stream.
+- Investigation targets must have current-session packet evidence. Typing an arbitrary IP does not create a host or a risk verdict.
+- Local assets require repeated source-frame evidence and a valid unicast source MAC.
+- Physical switch/router hops are never invented.
+- Quiet traffic does not mark capture down.
+- No Admin panel, remote shell, active scanner, Nmap console, Zeek, Suricata, secondary packet pipeline or endpoint-control stack.
+- Local history stores metadata only. Raw packet payloads/PCAP are not retained by the history worker.
 
-## Console
+Primary console:
 
-Primary navigation:
+`Overview · Network · Topology · Path Space · Security · Investigation · System · Watchdog`
 
-`Overview · Network · Topology · Path Space · Assets · Traffic · Security · Investigation · Forensics · System`
+Browser voice alerts can be enabled locally for high-priority security/runtime conditions.
 
-Investigation and Forensics are local authenticated passive-evidence workspaces. There is no Admin panel and no active-response control surface in the stable application.
+## What the sensor can actually see
 
-## Install
+A Windows machine on a normal switched Wi-Fi/Ethernet access connection generally sees its own traffic plus broadcast/multicast traffic delivered to it. It does **not** automatically see every other client on the campus LAN.
 
-Ubuntu 22.04+:
+For a school/college deployment that needs broader network visibility, place the Windows sensor where traffic is legitimately delivered to it, for example a managed-switch SPAN/mirror destination, an approved TAP, or a Windows gateway/bridge position. MON reports the evidence available at its selected adapter; it does not claim invisible traffic.
 
-```bash
-sudo apt update
-sudo apt install -y git curl ca-certificates
-git clone --branch monitor-v1 --single-branch https://github.com/Saitanveesh/Campus-Cyber-Operations-Platform.git
-cd Campus-Cyber-Operations-Platform
-bash bootstrap.sh
+## Fresh Windows installation
+
+Open **PowerShell as Administrator**:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+cd $HOME\Desktop
+git clone --branch windows-native-v2 --single-branch https://github.com/Saitanveesh/Campus-Cyber-Operations-Platform.git MON-Windows
+cd .\MON-Windows
+
+.\bootstrap.ps1
 ```
 
-Kali Linux uses the same stable single-source runtime:
+`bootstrap.ps1` verifies/installs the required Windows prerequisites, builds `MONWindows.exe`, installs the `MONWindows` service, starts it, and runs the readiness gate.
 
-```bash
-git clone --branch monitor-v1 --single-branch https://github.com/Saitanveesh/Campus-Cyber-Operations-Platform.git
-cd Campus-Cyber-Operations-Platform
-bash bootstrap.sh
+If Wireshark/Npcap is missing, the normal Wireshark installer is opened. Keep **Install Npcap** enabled.
+
+When installation finishes, open:
+
+```text
+http://127.0.0.1:8765
 ```
 
-On every install/upgrade, MON recreates `/opt/campus-ops/venv` instead of reusing the old Python environment. The installer also removes stale multi-sensor configuration and disables/removes old MON sensor service units before starting the current service.
+## Update an existing checkout
 
-Console: `http://127.0.0.1:8765`
+Administrator PowerShell:
 
-## Update an existing machine
+```powershell
+cd $HOME\Desktop\MON-Windows
 
-```bash
-cd ~/Campus-Cyber-Operations-Platform
-git checkout monitor-v1
+git checkout windows-native-v2
 git fetch origin
-git pull --ff-only origin monitor-v1
-bash bootstrap.sh
+git reset --hard origin/windows-native-v2
+
+.\bootstrap.ps1
 ```
 
-## Capture state
+## Verify the runtime
 
-`ACTIVE` means the managed TShark process is alive and bound to the selected interface. Quiet traffic keeps capture `ACTIVE` and changes only `traffic_activity` to `QUIET`. `WAITING` means no confirmed interface/session exists yet. `UNAVAILABLE` means TShark cannot be resolved. `ERROR` means the actual managed TShark process failed.
+```powershell
+Get-Service MONWindows
+Get-Service npcap -ErrorAction SilentlyContinue
 
-This prevents normal quiet periods from appearing as capture/link failures.
+& 'C:\Program Files\Wireshark\tshark.exe' -D
 
-## Verify
-
-```bash
-sudo systemctl status campus-ops.service --no-pager
-sudo /opt/campus-ops/venv/bin/python -m campus_ops.deployment_check
-curl -s http://127.0.0.1:8765/api/v1/live/status | python3 -m json.tool
-curl -s http://127.0.0.1:8765/api/v1/system/version | python3 -m json.tool
+Invoke-RestMethod http://127.0.0.1:8765/api/v1/live/status | ConvertTo-Json -Depth 8
+Invoke-RestMethod http://127.0.0.1:8765/api/v1/system/watchdog | ConvertTo-Json -Depth 8
+Invoke-RestMethod http://127.0.0.1:8765/api/v1/system/diagnostics | ConvertTo-Json -Depth 8
+Invoke-RestMethod http://127.0.0.1:8765/api/v1/system/sensor | ConvertTo-Json -Depth 6
 ```
 
-A ready deployment requires an active session, selected interface, healthy network-discovery and capture workers, a live TShark PID, matching network/capture interface, and the required Linux capture capabilities.
+A healthy deployment has one non-empty session ID, one selected Windows adapter, capture state `ACTIVE`, backend `tshark`, a live TShark PID, and matching network/capture adapter names.
 
-## Development
+`traffic_activity=QUIET` is healthy when the TShark process is alive.
 
-```bash
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
-.venv/bin/ruff check src tests
-.venv/bin/pytest -q
-CAMPUS_OPS_NO_BROWSER=1 .venv/bin/python -m campus_ops
+## One-command diagnostics
+
+```powershell
+.\scripts\diagnose_windows.ps1
 ```
 
-## Visibility boundary
+Use this before changing capture settings. It collects Windows adapters, addresses, routes, neighbors, Npcap state, TShark interfaces, MON service state, live capture status, observed targets, watchdog output and deterministic remediation guidance.
 
-MON can report only traffic visible to its capture interface. On a switched network, a normal access port normally does not receive all other hosts' unicast traffic. Wider passive visibility requires legitimate sensor placement such as a SPAN/mirror port, TAP or gateway/bridge position. MON does not invent physical switch/router hops that it cannot observe.
+## Real-IP investigation rule
+
+List IPs MON has actually observed in the current TShark session:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8765/api/v1/operator/targets | ConvertTo-Json -Depth 8
+```
+
+Investigate one of those IPs:
+
+```powershell
+$ip = 'REPLACE_WITH_AN_OBSERVED_IP'
+Invoke-RestMethod "http://127.0.0.1:8765/api/v1/operator/investigate/$ip" | ConvertTo-Json -Depth 10
+```
+
+An unseen IP receives HTTP 404 with the explanation that it was not observed in current TShark evidence. MON does not fabricate an assessment.
+
+## Evidence retention
+
+MON keeps bounded local metadata history at:
+
+```text
+C:\ProgramData\MON\evidence.db
+```
+
+Default retention is seven days. Stored history consists of security/control events plus aggregate asset/flow snapshots. The history worker does not persist packet payloads or PCAP.
+
+Historical metadata for a currently known IP can be queried with:
+
+```powershell
+$ip = 'REPLACE_WITH_AN_OBSERVED_IP'
+Invoke-RestMethod "http://127.0.0.1:8765/api/v1/history/ip/$ip" | ConvertTo-Json -Depth 10
+```
+
+## Site/sensor identity
+
+A persistent sensor UUID is stored under `C:\ProgramData\MON`. Optional deployment labels prepare the sensor for a future multi-tenant SaaS control plane:
+
+```powershell
+[Environment]::SetEnvironmentVariable('MON_TENANT_ID','school-001','Machine')
+[Environment]::SetEnvironmentVariable('MON_SITE_ID','campus-main','Machine')
+[Environment]::SetEnvironmentVariable('MON_SITE_NAME','Main Campus','Machine')
+Restart-Service MONWindows
+```
+
+These labels do not send data anywhere. This branch contains the Windows sensor/operator product; a hosted multi-tenant control plane requires separate authenticated cloud enrollment and tenancy controls before production use.
+
+## Build from source
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\scripts\build_windows.ps1
+```
+
+Output:
+
+```text
+dist\MONWindows.exe
+```
+
+The build runs Ruff, pytest and dependency validation before packaging unless `-SkipTests` is explicitly supplied.
+
+## Service operations
+
+```powershell
+Get-Service MONWindows
+Restart-Service MONWindows
+Stop-Service MONWindows
+Start-Service MONWindows
+```
+
+Remove the service:
+
+```powershell
+.\scripts\install_windows_service.ps1 -Remove
+```
+
+## Data and privacy posture
+
+MON is intended to minimize data collection while still supporting network detection and investigation. The default product stores metadata, not payload content; does not decrypt TLS; does not perform active host scanning; does not create arbitrary assets from typed IPs; and exposes the operator API on localhost only.
+
+Before offering MON as a hosted service to schools/colleges, add a separately reviewed SaaS control plane with tenant isolation, authenticated sensor enrollment, TLS transport, role-based access, audit logging, retention policy management, backups, monitoring, incident-response procedures and applicable privacy/compliance controls.
