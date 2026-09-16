@@ -71,6 +71,28 @@ def _snapshot() -> dict:
     }
 
 
+def _add_confirmed_endpoint(snapshot: dict, *, status: str = "ONLINE", platform: str = "windows") -> None:
+    snapshot["live"]["assets"].append(
+        {
+            "ip": "172.18.3.55",
+            "mac": "00:11:22:33:44:55",
+            "confidence": "HIGH",
+            "evidence": "CONFIRMED_LOCAL_SOURCE_FRAMES",
+        }
+    )
+    snapshot["live"]["flows"].append(
+        {"src": "172.18.3.55", "dst": "172.18.0.1", "packets": 4, "bytes": 400}
+    )
+    snapshot["managed_agents"] = [
+        {
+            "endpoint_id": "lab-55",
+            "status": status,
+            "platform": platform,
+            "telemetry": {"network_addresses": [{"address": "172.18.3.55"}]},
+        }
+    ]
+
+
 def test_fake_ip_is_not_observed_and_never_gets_green_assessment():
     snapshot = _snapshot()
     truth = assess_target_truth(snapshot, "172.18.9.99")
@@ -91,26 +113,9 @@ def test_confirmed_asset_is_not_automatically_manageable():
     assert truth["is_gateway"] is True
 
 
-def test_agent_backed_confirmed_endpoint_becomes_manageable():
+def test_online_windows_agent_backed_confirmed_endpoint_becomes_manageable():
     snapshot = _snapshot()
-    snapshot["live"]["assets"].append(
-        {
-            "ip": "172.18.3.55",
-            "mac": "00:11:22:33:44:55",
-            "confidence": "HIGH",
-            "evidence": "CONFIRMED_LOCAL_SOURCE_FRAMES",
-        }
-    )
-    snapshot["live"]["flows"].append(
-        {"src": "172.18.3.55", "dst": "172.18.0.1", "packets": 4, "bytes": 400}
-    )
-    snapshot["managed_agents"] = [
-        {
-            "endpoint_id": "lab-55",
-            "status": "ONLINE",
-            "telemetry": {"network_addresses": [{"address": "172.18.3.55"}]},
-        }
-    ]
+    _add_confirmed_endpoint(snapshot)
 
     truth = assess_target_truth(snapshot, "172.18.3.55")
     assert truth["status"] == "MANAGEABLE_ASSET"
@@ -118,7 +123,23 @@ def test_agent_backed_confirmed_endpoint_becomes_manageable():
 
     capability = isolation_capability(snapshot, "172.18.3.55")
     assert capability["available"] is True
-    assert capability["control_method"] == "AUTHENTICATED_ENDPOINT_AGENT"
+    assert capability["control_method"] == "WINDOWS_FIREWALL_ENDPOINT_AGENT"
+
+
+def test_isolation_fails_closed_for_offline_agent():
+    snapshot = _snapshot()
+    _add_confirmed_endpoint(snapshot, status="OFFLINE")
+    capability = isolation_capability(snapshot, "172.18.3.55")
+    assert capability["available"] is False
+    assert any("offline" in reason for reason in capability["reasons"])
+
+
+def test_isolation_fails_closed_for_unsupported_linux_agent_backend():
+    snapshot = _snapshot()
+    _add_confirmed_endpoint(snapshot, platform="linux")
+    capability = isolation_capability(snapshot, "172.18.3.55")
+    assert capability["available"] is False
+    assert any("Windows agents only" in reason for reason in capability["reasons"])
 
 
 def test_isolation_refuses_monitor_and_gateway():
