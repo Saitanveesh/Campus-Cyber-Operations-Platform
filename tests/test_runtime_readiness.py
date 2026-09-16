@@ -1,30 +1,30 @@
 from pathlib import Path
 
 
-def test_readiness_gate_requires_real_active_capture():
-    source = Path("scripts/wait_for_console.sh").read_text()
-    assert 'state == "ACTIVE"' in source
-    assert 'backend == "tshark"' in source
-    assert "process_pid" in source
-    assert "session" in source
-    assert "interfaces_match" in source
-    assert "network_worker_state" in source
-    assert "capture_worker_state" in source
-    assert "Monitor ready:" in source
-
-
-def test_deployment_check_refuses_waiting_or_pidless_runtime_capture():
+def test_deployment_check_requires_windows_service_npcap_session_and_tshark():
     source = Path("src/campus_ops/deployment_check.py").read_text()
-    assert 'if state != "ACTIVE"' in source
-    assert "Runtime has no active monitoring session" in source
-    assert "Runtime has no selected monitoring interface" in source
-    assert "runtime capture PID is missing" in source
-    assert "Runtime network/capture interface mismatch" in source
+    assert 'SERVICE_NAME = "MONWindows"' in source
+    assert 'sc.exe", "query", "npcap"' in source
+    assert "runtime_profile" in source
+    assert "windows-native-single-source" in source
+    assert "current-session-packet-evidence-only" in source
+    assert "MON has no active monitoring session" in source
+    assert "MON capture is not ACTIVE" in source
+    assert "runtime TShark PID is missing" in source
+    assert "network/capture adapter mismatch" in source
 
 
-def test_ubuntu_ci_checks_live_capture_not_only_http_server():
-    source = Path(".github/workflows/ubuntu-ci.yml").read_text()
-    assert "runtime.get('state') == 'ACTIVE'" in source
-    assert "runtime.get('backend') == 'tshark'" in source
-    assert "runtime.get('process_pid')" in source
-    assert "status.get('session_id')" in source
+def test_bootstrap_runs_readiness_check_after_service_install():
+    source = Path("bootstrap.ps1").read_text()
+    assert "install_windows_service.ps1" in source
+    assert "Write-DeploymentManifest" in source
+    assert "campus_ops.deployment_check" in source
+    assert source.index("install_windows_service.ps1") < source.index("campus_ops.deployment_check")
+
+
+def test_windows_ci_checks_product_branch():
+    source = Path(".github/workflows/windows-ci.yml").read_text()
+    assert "windows-native-v2" in source
+    assert "python-version" in source
+    assert "ruff check src tests" in source
+    assert "pytest -q" in source
