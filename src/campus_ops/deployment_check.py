@@ -56,9 +56,20 @@ def _tshark_capture_check(interface: str, tshark: str) -> tuple[bool, str]:
     try:
         result = subprocess.run(
             [
-                "runuser", "-u", "campus-ops", "--", tshark,
-                "-n", "-i", interface, "-a", "duration:1",
-                "-T", "fields", "-e", "frame.len",
+                "runuser",
+                "-u",
+                "campus-ops",
+                "--",
+                tshark,
+                "-n",
+                "-i",
+                interface,
+                "-a",
+                "duration:1",
+                "-T",
+                "fields",
+                "-e",
+                "frame.len",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
@@ -86,7 +97,9 @@ def check() -> dict:
 
     console_status: dict[str, object] | None = None
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8765/api/v1/live/status", timeout=5) as response:
+        with urllib.request.urlopen(
+            "http://127.0.0.1:8765/api/v1/live/status", timeout=5
+        ) as response:
             console_status = json.load(response)
     except (OSError, ValueError, urllib.error.URLError) as exc:
         problems.append(f"Console unavailable on 127.0.0.1:8765: {exc}")
@@ -111,16 +124,59 @@ def check() -> dict:
             problems.append("TShark capture verification failed: " + detail)
 
     if isinstance(console_status, dict):
+        runtime_profile = str(console_status.get("runtime_profile") or "")
+        if runtime_profile != "stable-single-source":
+            problems.append(
+                f"Unexpected runtime profile: {runtime_profile or 'missing'}"
+            )
+
+        session_id = console_status.get("session_id")
+        if not session_id:
+            problems.append("Runtime has no active monitoring session")
+
+        network = console_status.get("network")
+        runtime_interface = None
+        if isinstance(network, dict):
+            runtime_interface = str(network.get("interface") or "") or None
+        if not runtime_interface:
+            problems.append("Runtime has no selected monitoring interface")
+
         live = console_status.get("live")
         if isinstance(live, dict):
             runtime_capture = live.get("capture")
             if isinstance(runtime_capture, dict):
                 capture["runtime"] = runtime_capture
-                state = str(runtime_capture.get("state") or "")
-                if state in {"ERROR", "UNAVAILABLE"}:
+                state = str(runtime_capture.get("state") or "UNKNOWN").upper()
+                backend = str(runtime_capture.get("backend") or "")
+                capture_interface = str(runtime_capture.get("interface") or "") or None
+                process_pid = runtime_capture.get("process_pid")
+
+                if state != "ACTIVE":
                     problems.append(
-                        "Runtime capture is not healthy: " + str(runtime_capture.get("detail") or state)
+                        "Runtime capture is not ACTIVE: "
+                        + str(runtime_capture.get("detail") or state)
                     )
+                if backend != "tshark":
+                    problems.append(
+                        f"Runtime capture backend is {backend or 'missing'}, expected tshark"
+                    )
+                if not capture_interface:
+                    problems.append("Runtime capture has no bound interface")
+                if runtime_interface and capture_interface and runtime_interface != capture_interface:
+                    problems.append(
+                        "Runtime network/capture interface mismatch: "
+                        f"network={runtime_interface} capture={capture_interface}"
+                    )
+                try:
+                    pid_ok = int(process_pid or 0) > 0
+                except (TypeError, ValueError):
+                    pid_ok = False
+                if not pid_ok:
+                    problems.append("Runtime capture has no live TShark process PID")
+            else:
+                problems.append("Runtime capture status is missing")
+        else:
+            problems.append("Runtime live status is missing")
 
     if not deployment.get("installed"):
         problems.append("No installation manifest; run bash bootstrap.sh")
