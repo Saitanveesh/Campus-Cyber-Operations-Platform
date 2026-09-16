@@ -97,19 +97,38 @@ def test_flows_are_packet_observed_and_tied_to_local_scope():
     assert "FLOW_TELEMETRY" not in source
 
 
-def test_current_ui_promotes_protected_passive_views_without_admin_panel():
+def test_current_ui_uses_first_class_passive_operator_views_without_admin_panel():
     source = Path("src/campus_ops/stable_ui.py").read_text()
+    operator_ui = Path("src/campus_ops/stable_operator_ui.py").read_text()
+    operator_routes = Path("src/campus_ops/stable_operator.py").read_text()
+
     assert "TOPOLOGY_EXTENSION" in source
     assert "PATHSPACE_EXTENSION" in source
+    assert "STABLE_OPERATOR_EXTENSION" in source
+    assert "ADMIN_EXTENSION" not in source
     assert "Stable 0.4.2" in source
     assert "Capture Interface" in source
-    assert "#adminButton{display:none!important}" in source
-    assert "Investigation" in source
-    assert "Forensics" in source
-    assert "button.tab[data-view=\"admin-hunt\"]" in source
-    assert "button.tab[data-view=\"admin-forensics\"]" in source
-    assert "button.tab[data-view=\"admin-remote\"]" in source
-    assert "button.tab[data-view=\"admin-contain\"]" in source
+
+    assert "Investigation Workspace" in operator_ui
+    assert "Forensics Workbench" in operator_ui
+    assert "view-investigation" in operator_ui
+    assert "view-forensics" in operator_ui
+    assert "adminButton" not in operator_ui
+    assert "Authorized Probe" not in operator_ui
+    assert "Remote Access Gateway" not in operator_ui
+    assert "Containment Console" not in operator_ui
+
+    assert "install_stable_operator_routes" in source
+    assert "PASSIVE_ONLY" in operator_routes
+    for forbidden in (
+        "remote/enroll",
+        "/probe",
+        "/snapshot",
+        "/isolate",
+        "/restore",
+        "/connect",
+    ):
+        assert forbidden not in operator_routes
 
     operational = Path("src/campus_ops/operational_core.py").read_text()
     assert "FastAPI" in operational
