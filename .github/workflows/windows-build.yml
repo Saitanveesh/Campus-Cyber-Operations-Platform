@@ -3,8 +3,13 @@ name: windows-build
 on:
   workflow_dispatch:
   push:
+    branches: [windows-native-v2]
     tags:
       - 'windows-v*'
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -24,10 +29,13 @@ jobs:
         shell: pwsh
         run: |
           if (!(Test-Path 'dist/MONWindows.exe')) { throw 'MONWindows.exe missing' }
-          Get-Item 'dist/MONWindows.exe' | Format-List Name,Length,LastWriteTime
+          $item = Get-Item 'dist/MONWindows.exe'
+          if ($item.Length -lt 1000000) { throw "MONWindows.exe is unexpectedly small: $($item.Length) bytes" }
+          $item | Format-List Name,Length,LastWriteTime
           Get-FileHash 'dist/MONWindows.exe' -Algorithm SHA256
       - uses: actions/upload-artifact@v4
         with:
-          name: MONWindows-1.0
+          name: MONWindows-1.0-${{ github.sha }}
           path: dist/MONWindows.exe
           if-no-files-found: error
+          retention-days: 14
