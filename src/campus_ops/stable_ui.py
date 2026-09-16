@@ -115,9 +115,22 @@ button.tab[data-view="admin-contain"],
       if(!button) continue;
       button.classList.remove('admin-tab');
       button.classList.add('protected-operator-tab');
-      button.textContent=label;
-      button.onclick=()=>openProtected(view);
-      if(system&&button.nextElementSibling!==system) nav.insertBefore(button,system);
+      if(button.textContent!==label) button.textContent=label;
+      if(button.dataset.promotedView!==view){
+        button.dataset.promotedView=view;
+        button.onclick=()=>openProtected(view);
+      }
+    }
+
+    if(system&&investigation&&forensics){
+      if(investigation.nextElementSibling!==forensics||forensics.nextElementSibling!==system){
+        nav.insertBefore(investigation,system);
+        nav.insertBefore(forensics,system);
+      }
+    }else if(system&&investigation&&investigation.nextElementSibling!==system){
+      nav.insertBefore(investigation,system);
+    }else if(system&&forensics&&forensics.nextElementSibling!==system){
+      nav.insertBefore(forensics,system);
     }
 
     try{
@@ -131,24 +144,27 @@ button.tab[data-view="admin-contain"],
     const gate=document.getElementById('adminGate');
     if(gate){
       const title=gate.querySelector('.admin-login h2');
-      if(title) title.textContent='Operator Access';
+      if(title&&title.textContent!=='Operator Access') title.textContent='Operator Access';
       const warning=gate.querySelector('.admin-login .warning');
-      if(warning) warning.textContent='Protected investigation workspaces are local-console only. Sign in to open passive investigation and forensic evidence views.';
+      const copy='Protected investigation workspaces are local-console only. Sign in to open passive investigation and forensic evidence views.';
+      if(warning&&warning.textContent!==copy) warning.textContent=copy;
     }
 
     const hunt=document.getElementById('view-admin-hunt');
     if(hunt){
       const title=hunt.querySelector('h2');
-      if(title) title.textContent='Investigation Workspace';
+      if(title&&title.textContent!=='Investigation Workspace') title.textContent='Investigation Workspace';
       const small=hunt.querySelector('.small');
-      if(small) small.textContent='Select a target and pivot through current-session evidence without generating traffic.';
+      const copy='Select a target and pivot through current-session evidence without generating traffic.';
+      if(small&&small.textContent!==copy) small.textContent=copy;
     }
     const forensic=document.getElementById('view-admin-forensics');
     if(forensic){
       const title=forensic.querySelector('h2');
-      if(title) title.textContent='Forensics Workbench';
+      if(title&&title.textContent!=='Forensics Workbench') title.textContent='Forensics Workbench';
       const small=forensic.querySelector('.small');
-      if(small) small.textContent='Passive evidence correlation for the selected target. Active probing is disabled in stable mode.';
+      const copy='Passive evidence correlation for the selected target. Active probing is disabled in stable mode.';
+      if(small&&small.textContent!==copy) small.textContent=copy;
     }
 
     const pending=sessionStorage.getItem('campusOpsPendingView');
