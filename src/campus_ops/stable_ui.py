@@ -86,7 +86,7 @@ button.tab[data-view="admin-contain"],
   }
 
   function openProtected(view){
-    if(protectedToken()){
+    if(protectedToken()&&document.getElementById(`view-${view}`)){
       sessionStorage.removeItem('campusOpsPendingView');
       setView(view);
       return;
@@ -101,36 +101,44 @@ button.tab[data-view="admin-contain"],
     if(gate) gate.classList.add('show');
   }
 
-  function promoteProtectedViews(){
-    const nav=document.querySelector('nav');
-    if(!nav) return;
-    const investigation=nav.querySelector('button.tab[data-view="admin-hunt"]');
-    const forensics=nav.querySelector('button.tab[data-view="admin-forensics"]');
-    const system=nav.querySelector('button.tab[data-view="system"]');
-
-    for(const [button,label,view] of [
-      [investigation,'Investigation','admin-hunt'],
-      [forensics,'Forensics','admin-forensics'],
-    ]){
-      if(!button) continue;
-      button.classList.remove('admin-tab');
-      button.classList.add('protected-operator-tab');
-      if(button.textContent!==label) button.textContent=label;
-      if(button.dataset.promotedView!==view){
-        button.dataset.promotedView=view;
-        button.onclick=()=>openProtected(view);
+  function ensureProtectedButton(nav,system,view,label){
+    let primary=nav.querySelector(`button.protected-operator-tab[data-view="${view}"]`);
+    if(!primary){
+      primary=document.createElement('button');
+      primary.className='tab protected-operator-tab';
+      primary.dataset.view=view;
+      primary.textContent=label;
+      primary.onclick=()=>openProtected(view);
+      nav.insertBefore(primary,system||null);
+    }else{
+      primary.classList.remove('admin-tab');
+      if(primary.textContent!==label) primary.textContent=label;
+      if(primary.dataset.promotedView!==view){
+        primary.dataset.promotedView=view;
+        primary.onclick=()=>openProtected(view);
       }
     }
 
-    if(system&&investigation&&forensics){
+    // The legacy admin extension may inject its own hidden copy after authentication.
+    // Keep exactly one visible primary-nav button and discard those duplicate shells.
+    nav.querySelectorAll(`button.admin-tab[data-view="${view}"]`).forEach(button=>{
+      if(button!==primary) button.remove();
+    });
+    return primary;
+  }
+
+  function promoteProtectedViews(){
+    const nav=document.querySelector('nav');
+    if(!nav) return;
+    const system=nav.querySelector('button.tab[data-view="system"]');
+    const investigation=ensureProtectedButton(nav,system,'admin-hunt','Investigation');
+    const forensics=ensureProtectedButton(nav,system,'admin-forensics','Forensics');
+
+    if(system){
       if(investigation.nextElementSibling!==forensics||forensics.nextElementSibling!==system){
         nav.insertBefore(investigation,system);
         nav.insertBefore(forensics,system);
       }
-    }else if(system&&investigation&&investigation.nextElementSibling!==system){
-      nav.insertBefore(investigation,system);
-    }else if(system&&forensics&&forensics.nextElementSibling!==system){
-      nav.insertBefore(forensics,system);
     }
 
     try{
@@ -168,7 +176,11 @@ button.tab[data-view="admin-contain"],
     }
 
     const pending=sessionStorage.getItem('campusOpsPendingView');
-    if(pending&&protectedToken()&&(pending==='admin-hunt'||pending==='admin-forensics')){
+    if(
+      pending&&protectedToken()&&
+      (pending==='admin-hunt'||pending==='admin-forensics')&&
+      document.getElementById(`view-${pending}`)
+    ){
       sessionStorage.removeItem('campusOpsPendingView');
       setView(pending);
     }
