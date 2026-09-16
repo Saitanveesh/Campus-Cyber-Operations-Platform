@@ -33,15 +33,23 @@ VIRTUAL_HINTS = (
 
 def classify_interface(name: str) -> str:
     lowered = name.lower()
-    if lowered.startswith(("lo", "loopback")):
+    if lowered == "lo" or lowered.startswith("loopback"):
         return "loopback"
     if lowered.startswith(("tun", "tap", "wg", "ppp", "tailscale", "zt")):
         return "tunnel"
     if any(token in lowered for token in VIRTUAL_HINTS):
         return "virtual"
-    if lowered.startswith(("wlp", "wlx")) or "wi-fi" in lowered or "wifi" in lowered or "wireless" in lowered or "wlan" in lowered:
+    if (
+        lowered.startswith(("wlp", "wlx"))
+        or "wi-fi" in lowered
+        or "wifi" in lowered
+        or "wireless" in lowered
+        or "wlan" in lowered
+    ):
         return "wireless"
-    if "ethernet" in lowered or lowered.startswith(("eth", "enp", "ens", "eno", "enx", "usb")):
+    if "ethernet" in lowered or lowered.startswith(
+        ("eth", "enp", "ens", "eno", "enx", "usb")
+    ):
         return "ethernet"
     return "other"
 
@@ -137,7 +145,9 @@ def _windows_routes() -> dict[str, tuple[bool, int | None, str | None]]:
             metric = int(metric_raw) if metric_raw is not None else None
             gateway = str(row.get("NextHop") or "") or None
             previous = result.get(name)
-            if previous is None or (metric is not None and (previous[1] is None or metric < previous[1])):
+            if previous is None or (
+                metric is not None and (previous[1] is None or metric < previous[1])
+            ):
                 result[name] = (True, metric, gateway)
         return result
     except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError):
@@ -195,26 +205,95 @@ def discover_candidates() -> list[NetworkCandidate]:
     return candidates
 
 
-def elect_network(candidates: list[NetworkCandidate], requested: str | None = None) -> SelectedNetwork | None:
-    requested = requested if requested is not None else os.environ.get("CAMPUS_OPS_INTERFACE", "auto")
+def _selected_from_candidate(candidate: NetworkCandidate) -> SelectedNetwork:
+    score, reasons = score_candidate(candidate)
+    return SelectedNetwork(
+        interface=candidate.name,
+        score=score,
+        reasons=reasons,
+        ipv4=candidate.ipv4,
+        ipv6=candidate.ipv6,
+        prefixes=candidate.prefixes,
+        default_route=candidate.default_route,
+        route_metric=candidate.route_metric,
+        gateway=candidate.gateway,
+    )
+
+
+def _prefixes_for_version(prefixes: tuple[str, ...], version: int) -> tuple[str, ...]:
+    result: list[str] = []
+    for value in prefixes:
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            continue
+        if network.version == version:
+            result.append(network.with_prefixlen)
+    return tuple(sorted(set(result)))
+
+
+def _material_identity(network: SelectedNetwork) -> tuple[object, ...]:
+    """Stable identity used to decide whether a live session really changed.
+
+    Exact IPv6 addresses are deliberately excluded because temporary/privacy IPv6
+    addresses can rotate while the interface, route and L2 network remain unchanged.
+    IPv4 address changes remain material. IPv6-only links are identified by their
+    routed prefix and gateway rather than one temporary host address.
+    """
+    if network.ipv4:
+        addresses: tuple[str, ...] = tuple(sorted(set(network.ipv4)))
+        prefixes = _prefixes_for_version(network.prefixes, 4)
+        family = "ipv4"
+    else:
+        addresses = ()
+        prefixes = _prefixes_for_version(network.prefixes, 6)
+        family = "ipv6"
+    return (
+        network.interface,
+        family,
+        addresses,
+        prefixes,
+        network.default_route,
+        network.gateway,
+    )
+
+
+def elect_network(
+    candidates: list[NetworkCandidate], requested: str | None = None
+) -> SelectedNetwork | None:
+    requested = (
+        requested if requested is not None else os.environ.get("CAMPUS_OPS_INTERFACE", "auto")
+    )
     if requested and requested != "auto":
         if requested == "any" and os.name != "nt":
             live = [c for c in candidates if c.is_up and not c.is_loopback]
             if not live:
                 return None
             return SelectedNetwork(
-                "any", 100, ("all-linux-interfaces",),
+                "any",
+                100,
+                ("all-linux-interfaces",),
                 tuple(sorted({ip for c in live for ip in c.ipv4})),
                 tuple(sorted({ip for c in live for ip in c.ipv6})),
                 tuple(sorted({prefix for c in live for prefix in c.prefixes})),
-                any(c.default_route for c in live), None, None,
+                any(c.default_route for c in live),
+                None,
+                None,
             )
         forced = next((c for c in candidates if c.name == requested and c.is_up), None)
         if forced is None:
             return None
-        return SelectedNetwork(forced.name, 100, ("explicit-interface",), forced.ipv4,
-                               forced.ipv6, forced.prefixes, forced.default_route,
-                               forced.route_metric, forced.gateway)
+        return SelectedNetwork(
+            forced.name,
+            100,
+            ("explicit-interface",),
+            forced.ipv4,
+            forced.ipv6,
+            forced.prefixes,
+            forced.default_route,
+            forced.route_metric,
+            forced.gateway,
+        )
     scored = [(score_candidate(candidate), candidate) for candidate in candidates]
     viable = [(result, candidate) for result, candidate in scored if result[0] >= 40]
     if not viable:
@@ -222,7 +301,9 @@ def elect_network(candidates: list[NetworkCandidate], requested: str | None = No
 
     routed = [(result, candidate) for result, candidate in viable if candidate.default_route]
     pool = routed or viable
-    physical = [(result, candidate) for result, candidate in pool if candidate.category != "virtual"]
+    physical = [
+        (result, candidate) for result, candidate in pool if candidate.category != "virtual"
+    ]
     if physical:
         pool = physical
 
@@ -255,21 +336,51 @@ class NetworkDiscoveryWorker(BaseWorker):
         switch_margin: int = 15,
         confirmations: int = 2,
         unavailable_confirmations: int = 3,
+        identity_confirmations: int = 3,
     ) -> None:
         super().__init__("network-discovery", bus)
         self.interval = interval
         self.switch_margin = switch_margin
         self.confirmations = max(1, confirmations)
         self.unavailable_confirmations = max(1, unavailable_confirmations)
+        self.identity_confirmations = max(1, identity_confirmations)
         self.selected: SelectedNetwork | None = None
         self.candidates: list[NetworkCandidate] = []
         self._pending_name: str | None = None
         self._pending_count = 0
         self._loss_count = 0
+        self._pending_identity: tuple[object, ...] | None = None
+        self._pending_identity_network: SelectedNetwork | None = None
+        self._pending_identity_count = 0
+        self._discovery_errors = 0
+
+    async def _sleep(self) -> None:
+        try:
+            await asyncio.wait_for(self._stop.wait(), timeout=self.interval)
+        except TimeoutError:
+            pass
+
+    def _reset_identity_pending(self) -> None:
+        self._pending_identity = None
+        self._pending_identity_network = None
+        self._pending_identity_count = 0
 
     async def run(self) -> None:
         while not self.stopping:
-            self.candidates = await asyncio.to_thread(discover_candidates)
+            try:
+                candidates = await asyncio.to_thread(discover_candidates)
+            except (OSError, ValueError, psutil.Error, subprocess.SubprocessError) as exc:
+                self._discovery_errors += 1
+                self.health.state = WorkerState.DEGRADED
+                held = self.selected.interface if self.selected else "none"
+                self.health.heartbeat(
+                    f"network discovery retry {self._discovery_errors}; holding {held}: {exc}"
+                )
+                await self._sleep()
+                continue
+
+            self._discovery_errors = 0
+            self.candidates = candidates
             proposed = elect_network(self.candidates)
             await self._consider(proposed)
             if self.selected:
@@ -279,15 +390,17 @@ class NetworkDiscoveryWorker(BaseWorker):
                         f"holding {self.selected.interface} through transient link observation "
                         f"{self._loss_count}/{self.unavailable_confirmations}"
                     )
+                elif self._pending_identity_count:
+                    self.health.heartbeat(
+                        f"confirming network identity on {self.selected.interface} "
+                        f"{self._pending_identity_count}/{self.identity_confirmations}"
+                    )
                 else:
                     self.health.heartbeat(f"selected {self.selected.interface}")
             else:
                 self.health.state = WorkerState.DEGRADED
                 self.health.heartbeat("no viable monitoring interface")
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.interval)
-            except TimeoutError:
-                pass
+            await self._sleep()
 
     async def _declare_unavailable(self) -> None:
         if self.selected is None:
@@ -297,6 +410,7 @@ class NetworkDiscoveryWorker(BaseWorker):
         self._pending_name = None
         self._pending_count = 0
         self._loss_count = 0
+        self._reset_identity_pending()
         await self.bus.publish(
             Event(
                 source=self.name,
@@ -305,10 +419,42 @@ class NetworkDiscoveryWorker(BaseWorker):
             )
         )
 
+    async def _confirm_identity(self, proposed: SelectedNetwork) -> None:
+        identity = _material_identity(proposed)
+        if self._pending_identity == identity:
+            self._pending_identity_count += 1
+            self._pending_identity_network = proposed
+        else:
+            self._pending_identity = identity
+            self._pending_identity_network = proposed
+            self._pending_identity_count = 1
+
+        if self._pending_identity_count < self.identity_confirmations:
+            return
+
+        previous = self.selected
+        current = self._pending_identity_network or proposed
+        self.selected = current
+        self._reset_identity_pending()
+        if previous is None:
+            return
+        await self.bus.publish(
+            Event(
+                source=self.name,
+                kind=EventKind.NETWORK,
+                payload={
+                    "change": "NETWORK_IDENTITY_CHANGED",
+                    "previous": asdict(previous),
+                    "current": asdict(current),
+                },
+            )
+        )
+
     async def _consider(self, proposed: SelectedNetwork | None) -> None:
         if proposed is None:
             self._pending_name = None
             self._pending_count = 0
+            self._reset_identity_pending()
             if self.selected is None:
                 self._loss_count = 0
                 return
@@ -327,42 +473,41 @@ class NetworkDiscoveryWorker(BaseWorker):
                 await self._declare_unavailable()
             elif current is not None:
                 self._loss_count = 0
-                # Compare against current link/route state, never yesterday's high score.
-                current_score, current_reasons = score_candidate(current)
-                self.selected = SelectedNetwork(current.name, current_score, current_reasons,
-                    self.selected.ipv4, self.selected.ipv6, self.selected.prefixes,
-                    self.selected.default_route, self.selected.route_metric, self.selected.gateway)
+                fresh = _selected_from_candidate(current)
+                # Keep the established identity while a competing interface or a
+                # material identity change is still inside its confirmation window,
+                # but use current score/reasons for switch decisions.
+                self.selected = SelectedNetwork(
+                    self.selected.interface,
+                    fresh.score,
+                    fresh.reasons,
+                    self.selected.ipv4,
+                    self.selected.ipv6,
+                    self.selected.prefixes,
+                    self.selected.default_route,
+                    self.selected.route_metric,
+                    self.selected.gateway,
+                )
 
         if self.selected is None:
+            self._reset_identity_pending()
             await self._confirm_and_switch(proposed)
             return
 
         if proposed.interface == self.selected.interface:
             self._loss_count = 0
-            changed_identity = (
-                proposed.ipv4 != self.selected.ipv4
-                or proposed.ipv6 != self.selected.ipv6
-                or proposed.prefixes != self.selected.prefixes
-                or proposed.gateway != self.selected.gateway
-            )
-            previous = self.selected
-            self.selected = proposed
             self._pending_name = None
             self._pending_count = 0
-            if changed_identity:
-                await self.bus.publish(
-                    Event(
-                        source=self.name,
-                        kind=EventKind.NETWORK,
-                        payload={
-                            "change": "NETWORK_IDENTITY_CHANGED",
-                            "previous": asdict(previous),
-                            "current": asdict(proposed),
-                        },
-                    )
-                )
+            if _material_identity(proposed) == _material_identity(self.selected):
+                # Non-material metadata such as temporary IPv6 addresses may update
+                # without tearing down the monitoring session or restarting TShark.
+                self.selected = proposed
+                self._reset_identity_pending()
+                return
+            await self._confirm_identity(proposed)
             return
 
+        self._reset_identity_pending()
         forced = "explicit-interface" in proposed.reasons or proposed.interface == "any"
         if not forced and proposed.score < self.selected.score + self.switch_margin:
             self._pending_name = None
@@ -372,6 +517,7 @@ class NetworkDiscoveryWorker(BaseWorker):
 
     async def _confirm_and_switch(self, proposed: SelectedNetwork) -> None:
         self._loss_count = 0
+        self._reset_identity_pending()
         if self._pending_name == proposed.interface:
             self._pending_count += 1
         else:
