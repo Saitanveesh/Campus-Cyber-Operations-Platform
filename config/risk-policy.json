@@ -1,7 +1,0 @@
-{
-  "investigate_threshold": 40,
-  "contain_threshold": 85,
-  "minimum_origins": 2,
-  "minimum_confidence": 80,
-  "window_seconds": 300
-}
