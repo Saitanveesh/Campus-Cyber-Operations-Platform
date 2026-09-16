@@ -31,11 +31,12 @@ def test_unspecified_ip_is_not_promoted():
     assert row["dst_ip"] is None
 
 
-def test_soc_routes_are_installed(tmp_path, monkeypatch):
+def test_stable_runtime_excludes_parallel_soc_routes(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     app = build_app()
     paths = {getattr(route, "path", "") for route in app.routes}
-    assert "/api/v1/system/soc-overview" in paths
-    assert "/api/v1/system/infrastructure-inventory" in paths
-    assert "/api/v1/admin/soc/pivot/{target}" in paths
-    assert app.state.enterprise_soc_installed is True
+    assert "/api/v1/system/soc-overview" not in paths
+    assert "/api/v1/system/infrastructure-inventory" not in paths
+    assert "/api/v1/anomalies" in paths
+    assert "/api/v1/pathspace/{target}" in paths
+    assert getattr(app.state, "enterprise_soc_installed", False) is False
