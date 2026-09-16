@@ -21,6 +21,34 @@ def test_stable_runtime_mounts_operational_backends_without_legacy_runtime_stack
     assert getattr(app.state, "runtime_extensions_installed", False) is False
 
 
+def test_stable_runtime_mounts_only_passive_protected_operator_routes(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    app = build_app()
+    paths = {getattr(route, "path", "") for route in app.routes}
+
+    for expected in (
+        "/api/v1/admin/login",
+        "/api/v1/admin/status",
+        "/api/v1/admin/logout",
+        "/api/v1/admin/targets",
+        "/api/v1/admin/forensics/{target}",
+    ):
+        assert expected in paths
+
+    for forbidden in (
+        "/api/v1/admin/remote/enroll",
+        "/api/v1/admin/forensics/{target}/probe",
+        "/api/v1/admin/targets/{target}/snapshot",
+        "/api/v1/admin/targets/{target}/isolate",
+        "/api/v1/admin/targets/{target}/restore",
+        "/api/v1/admin/targets/{target}/connect",
+    ):
+        assert forbidden not in paths
+
+    assert app.state.stable_operator_routes_installed is True
+    assert getattr(app.state, "admin_routes_installed", False) is False
+
+
 def test_console_copy_removes_old_taglines():
     html = (
         "Evidence-first network defence console | "
