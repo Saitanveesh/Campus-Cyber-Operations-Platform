@@ -28,6 +28,9 @@ def test_runtime_does_not_mount_experimental_console_layers():
     main = Path("src/campus_ops/main.py").read_text()
     assert "StableOrchestrator" in main
     assert "install_stable_ui" in main
+    assert "install_operational_core" in main
+    assert "install_path_analysis" in main
+    assert "install_watchdog_api" in main
     for forbidden in (
         "install_runtime_extensions",
         "install_enterprise_layer",
@@ -92,19 +95,17 @@ def test_flows_are_packet_observed_and_tied_to_local_scope():
     assert "FLOW_TELEMETRY" not in source
 
 
-def test_stable_ui_restores_topology_pathspace_and_passive_admin():
+def test_current_ui_is_preserved_while_backend_core_is_added():
     source = Path("src/campus_ops/stable_ui.py").read_text()
     assert "TOPOLOGY_EXTENSION" in source
     assert "PATHSPACE_EXTENSION" in source
-    assert "ADMIN_EXTENSION" in source
-    assert "install_admin_routes(app)" in source
-    assert "'overview','network','topology','assets','traffic','security','system'" in source
-    assert 'button.tab[data-view="topology"]' not in source
-    assert 'button.tab[data-view="admin-remote"]' in source
-    assert 'button.tab[data-view="admin-contain"]' in source
-    for hidden in ("endpoints", "response", "evidence", "history"):
-        assert f'data-view=\\"{hidden}\\"' in source
     assert "Stable 0.4.2" in source
+    assert "Capture Interface" in source
+
+    operational = Path("src/campus_ops/operational_core.py").read_text()
+    assert "FastAPI" in operational
+    assert "HTMLResponse" not in operational
+    assert "stable_ui" not in operational
 
 
 def test_bootstrap_records_exact_deployed_branch_and_commit():
