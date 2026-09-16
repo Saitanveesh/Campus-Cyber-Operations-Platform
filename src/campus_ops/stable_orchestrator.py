@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import platform
 from dataclasses import asdict
@@ -254,6 +255,55 @@ class StableOrchestrator:
         self._session_sub = None
         self.started_at = None
 
+    @staticmethod
+    def _valid_ip(value: object) -> str | None:
+        raw = str(value or "").strip()
+        try:
+            ip = ipaddress.ip_address(raw)
+        except ValueError:
+            return None
+        if ip.is_unspecified or ip.is_loopback or ip.is_multicast:
+            return None
+        return str(ip)
+
+    @classmethod
+    def _derive_risk_graph(cls, live: dict[str, object]) -> dict[str, object]:
+        """Build a small risk overlay from current alert/incident evidence only."""
+        severity_score = {"CRITICAL": 95, "HIGH": 75, "MEDIUM": 50, "LOW": 25, "INFO": 5}
+        nodes: dict[str, dict[str, object]] = {}
+
+        def add(target: object, score: int, reason: str) -> None:
+            ip = cls._valid_ip(target)
+            if not ip:
+                return
+            row = nodes.setdefault(ip, {"id": ip, "risk": 0, "reasons": []})
+            row["risk"] = max(int(row["risk"]), score)
+            reasons = row["reasons"]
+            assert isinstance(reasons, list)
+            if reason and reason not in reasons:
+                reasons.append(reason)
+
+        for incident in live.get("incidents", []):
+            if not isinstance(incident, dict):
+                continue
+            severity = str(incident.get("severity") or "INFO").upper()
+            score = max(
+                severity_score.get(severity, 5),
+                int(incident.get("confidence") or 0),
+            )
+            add(incident.get("source"), score, str(incident.get("title") or "incident evidence"))
+
+        for alert in live.get("alerts", []):
+            if not isinstance(alert, dict):
+                continue
+            severity = str(alert.get("severity") or "INFO").upper()
+            payload = alert.get("payload") if isinstance(alert.get("payload"), dict) else {}
+            evidence = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+            target = evidence.get("source") or evidence.get("src") or payload.get("source")
+            add(target, severity_score.get(severity, 5), str(payload.get("title") or "alert evidence"))
+
+        return {"nodes": sorted(nodes.values(), key=lambda row: int(row["risk"]), reverse=True)}
+
     def snapshot(self) -> dict[str, object]:
         worker_states = {
             worker.name: {
@@ -274,6 +324,11 @@ class StableOrchestrator:
         elif any(worker.health.state == WorkerState.DEGRADED for worker in self.workers):
             overall = "DEGRADED"
 
+        live = self.state.snapshot()
+        metrics = dict(live.get("metrics") or {})
+        metrics["risk_graph"] = self._derive_risk_graph(live)
+        live["metrics"] = metrics
+
         return {
             "product": "Campus Cyber Operations Platform",
             "platform": platform.system(),
@@ -292,5 +347,5 @@ class StableOrchestrator:
             "network_candidates": [asdict(item) for item in self.network.candidates],
             "workers": worker_states,
             "event_bus": self.bus.stats(),
-            "live": self.state.snapshot(),
+            "live": live,
         }
