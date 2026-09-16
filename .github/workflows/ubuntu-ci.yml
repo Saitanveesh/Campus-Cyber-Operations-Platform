@@ -67,6 +67,11 @@ jobs:
           assert report['capture']['verified'], report['capture']
           assert report['capture']['backend'] == 'tshark', report['capture']
           assert report['capture']['interface'] not in {None, 'any', 'lo'}, report['capture']
+          runtime = report['capture'].get('runtime') or {}
+          assert runtime.get('state') == 'ACTIVE', runtime
+          assert runtime.get('backend') == 'tshark', runtime
+          assert runtime.get('interface') not in {None, 'any', 'lo'}, runtime
+          assert int(runtime.get('process_pid') or 0) > 0, runtime
           PY
       - name: Verify parallel managed sensors are disabled
         run: |
@@ -88,7 +93,14 @@ jobs:
               status = json.load(r)
           assert status['runtime_profile'] == 'stable-single-source', status
           assert status['authoritative_packet_source'] == 'tshark', status
-          assert status['version'] == '0.4.0', status
+          assert status['version'] == '0.4.2', status
+          assert status.get('session_id'), status
+          assert isinstance(status.get('network'), dict) and status['network'].get('interface'), status
+          capture = status['live']['capture']
+          assert capture.get('state') == 'ACTIVE', capture
+          assert capture.get('backend') == 'tshark', capture
+          assert capture.get('interface') not in {None, 'any', 'lo'}, capture
+          assert int(capture.get('process_pid') or 0) > 0, capture
           PY
       - name: Collect service diagnostics
         if: always()
