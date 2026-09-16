@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from .models import Event
@@ -10,6 +11,7 @@ from .models import Event
 class Subscription:
     name: str
     queue: asyncio.Queue[Event]
+    predicate: Callable[[Event], bool] | None = None
     dropped: int = 0
 
 
@@ -21,9 +23,17 @@ class EventBus:
         self._subs: dict[str, Subscription] = {}
         self._lock = asyncio.Lock()
 
-    async def subscribe(self, name: str) -> Subscription:
+    async def subscribe(
+        self,
+        name: str,
+        predicate: Callable[[Event], bool] | None = None,
+    ) -> Subscription:
         async with self._lock:
-            sub = Subscription(name=name, queue=asyncio.Queue(self._queue_size))
+            sub = Subscription(
+                name=name,
+                queue=asyncio.Queue(self._queue_size),
+                predicate=predicate,
+            )
             self._subs[name] = sub
             return sub
 
@@ -35,6 +45,8 @@ class EventBus:
         async with self._lock:
             subscribers = tuple(self._subs.values())
         for sub in subscribers:
+            if sub.predicate is not None and not sub.predicate(event):
+                continue
             if sub.queue.full():
                 try:
                     sub.queue.get_nowait()
