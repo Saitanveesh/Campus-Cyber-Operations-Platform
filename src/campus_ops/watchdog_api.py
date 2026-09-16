@@ -6,6 +6,8 @@ from typing import Any
 import psutil
 from fastapi import FastAPI
 
+SERVICE_NAME = "MONWindows"
+
 
 def _anomaly_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
     live = snapshot.get("live") if isinstance(snapshot.get("live"), dict) else {}
@@ -46,7 +48,14 @@ def _anomaly_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {"count": len(rows), "items": rows[:100]}
 
 
-def _problem(problem: str, severity: str, evidence: str, cause: str, fix: str, verify: str) -> dict[str, str]:
+def _problem(
+    problem: str,
+    severity: str,
+    evidence: str,
+    cause: str,
+    fix: str,
+    verify: str,
+) -> dict[str, str]:
     return {
         "problem": problem,
         "severity": severity,
@@ -136,7 +145,11 @@ def _diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
             {"check": "npcap_device", "ok": bool(capture_device), "value": capture_device or None},
             {
                 "check": "adapter_alignment",
-                "ok": bool(interface and capture_interface and interface.casefold() == capture_interface.casefold()),
+                "ok": bool(
+                    interface
+                    and capture_interface
+                    and interface.casefold() == capture_interface.casefold()
+                ),
                 "value": f"network={interface or '-'} capture={capture_interface or '-'}",
             },
         ]
@@ -172,7 +185,7 @@ def _diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
                 "HIGH",
                 f"process_pid={process_pid or 'missing'}; {pid_detail}",
                 "MON has no live TShark process corresponding to its capture state.",
-                "Run `.\\scripts\\diagnose_windows.ps1`; restart the CampusCyberOperationsPlatform service only after fixing the first reported TShark/Npcap error.",
+                "Run `.\\scripts\\diagnose_windows.ps1`; restart MONWindows only after fixing the first reported TShark/Npcap error.",
                 "Watchdog must show a live TShark PID and capture.state=ACTIVE.",
             )
         )
@@ -183,7 +196,7 @@ def _diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
                 "HIGH",
                 f"network.interface={interface}; capture.interface={capture_interface}",
                 "Windows network selection changed but the managed capture was not rebound to the same confirmed adapter.",
-                "Restart `CampusCyberOperationsPlatform` from Services or run `Restart-Service CampusCyberOperationsPlatform` in Administrator PowerShell. If it returns, capture `.\\scripts\\diagnose_windows.ps1` output.",
+                "Run `Restart-Service MONWindows` in Administrator PowerShell. If it returns, capture `.\\scripts\\diagnose_windows.ps1` output.",
                 "The Network and Capture interface names must match exactly ignoring case.",
             )
         )
@@ -202,6 +215,9 @@ def _diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
         elif name == "capture":
             cause = "The managed TShark/Npcap capture worker reported a process or adapter binding failure."
             fix = "Run `tshark.exe -D`, verify the Npcap service/driver, then run `.\\scripts\\diagnose_windows.ps1`."
+        elif name == "evidence-store":
+            cause = "The local metadata history database could not be opened or written."
+            fix = "Check free disk space and permissions on `C:\\ProgramData\\MON`, then restart `MONWindows`."
         else:
             cause = "A packet-analysis worker reported an internal processing error or unhealthy dependency."
             fix = "Use the System diagnostics and Windows service status. Do not reinstall capture components unless the capture worker itself is failing."
