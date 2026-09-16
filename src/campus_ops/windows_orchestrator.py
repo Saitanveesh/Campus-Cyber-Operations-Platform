@@ -4,6 +4,7 @@ import os
 
 from campus_ops.config import DEFAULT_SETTINGS, Settings
 from campus_ops.stable_orchestrator import StableOrchestrator
+from campus_ops.workers.evidence_store import EvidenceStoreWorker
 from campus_ops.workers.windows_capture import WindowsCaptureWorker
 from campus_ops.workers.windows_network import WindowsNetworkDiscoveryWorker
 
@@ -37,11 +38,17 @@ class WindowsOrchestrator(StableOrchestrator):
             self.get_session_id,
             self.get_interface,
         )
+        self.evidence_store = EvidenceStoreWorker(
+            self.bus,
+            self.state,
+            self.get_session_id,
+        )
 
         self.workers = [
             self.network if worker is old_network else self.capture if worker is old_capture else worker
             for worker in self.workers
         ]
+        self.workers.append(self.evidence_store)
 
     def snapshot(self) -> dict[str, object]:
         value = super().snapshot()
@@ -50,6 +57,7 @@ class WindowsOrchestrator(StableOrchestrator):
         value["capture_stack"] = "tshark+npcap"
         value["platform_contract"] = "native-windows-only"
         value["ip_truth_policy"] = "current-session-packet-evidence-only"
+        value["history_policy"] = "metadata-only-7-day-local-retention"
         interface = self.get_interface()
         value["capture_adapter_evidence"] = (
             WindowsCaptureWorker.adapter_evidence(interface) if interface else None
