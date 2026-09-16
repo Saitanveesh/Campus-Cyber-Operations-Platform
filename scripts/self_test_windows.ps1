@@ -12,6 +12,7 @@ $Warnings = New-Object System.Collections.Generic.List[string]
 function Pass([string]$Message) { Write-Host "[PASS] $Message" -ForegroundColor Green }
 function Fail([string]$Message) { $Failures.Add($Message); Write-Host "[FAIL] $Message" -ForegroundColor Red }
 function Warn([string]$Message) { $Warnings.Add($Message); Write-Host "[WARN] $Message" -ForegroundColor Yellow }
+function Number-OrZero($Value) { if ($null -eq $Value) { return 0 }; return $Value }
 
 Write-Host '============================================================'
 Write-Host ' MON Windows - End-to-End Self Test'
@@ -49,7 +50,8 @@ if ($status) {
     $capture = $status.live.capture
     if ($capture.state -eq 'ACTIVE') { Pass 'Capture state is ACTIVE' } else { Fail "Capture state is $($capture.state): $($capture.detail)" }
     if ($capture.backend -eq 'tshark') { Pass 'Capture backend is TShark' } else { Fail "Capture backend is $($capture.backend)" }
-    if ([int]($capture.process_pid ?? 0) -gt 0) { Pass "Managed TShark PID: $($capture.process_pid)" } else { Fail 'Managed TShark PID is missing' }
+    $pidValue = [int](Number-OrZero $capture.process_pid)
+    if ($pidValue -gt 0) { Pass "Managed TShark PID: $pidValue" } else { Fail 'Managed TShark PID is missing' }
     if ($capture.interface -and $status.network.interface -and $capture.interface.ToString().ToLowerInvariant() -eq $status.network.interface.ToString().ToLowerInvariant()) { Pass 'Network and capture adapters agree' } else { Fail "Adapter mismatch: network=$($status.network.interface) capture=$($capture.interface)" }
 }
 
@@ -110,7 +112,7 @@ for ($i = 1; $i -le [Math]::Max(1,$Samples); $i++) {
         [void]$sessionSet.Add([string]$sample.session_id)
         [void]$adapterSet.Add([string]$sample.network.interface)
         [void]$pidSet.Add([string]$sample.live.capture.process_pid)
-        $packets = [int64]($sample.live.capture.packets ?? 0)
+        $packets = [int64](Number-OrZero $sample.live.capture.packets)
         if ($previousPackets -ge 0 -and $packets -lt $previousPackets) { Fail "Packet counter moved backwards: $previousPackets -> $packets" }
         $previousPackets = $packets
         Write-Host ("[SOAK {0}/{1}] session={2} adapter={3} pid={4} state={5} activity={6} packets={7}" -f $i,$Samples,$sample.session_id,$sample.network.interface,$sample.live.capture.process_pid,$sample.live.capture.state,$sample.live.capture.traffic_activity,$packets)
