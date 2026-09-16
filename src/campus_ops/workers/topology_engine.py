@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -10,9 +11,30 @@ from campus_ops.state import LiveState
 from campus_ops.workers.base import BaseWorker
 from campus_ops.workers.intelligence import endpoint_role
 
+_LOCAL_ROLES = frozenset({"SENSOR", "INFRASTRUCTURE", "LOCAL_SUBNET_ENDPOINT"})
+_REJECT_ROLES = frozenset({"SPECIAL_ADDRESS", "MULTICAST", "BROADCAST", "UNKNOWN"})
+
+
+def _real_unicast_ip(value: object) -> str | None:
+    raw = str(value or "").strip()
+    try:
+        ip = ipaddress.ip_address(raw)
+    except ValueError:
+        return None
+    if ip.is_unspecified or ip.is_loopback or ip.is_multicast:
+        return None
+    if isinstance(ip, ipaddress.IPv4Address) and ip == ipaddress.IPv4Address("255.255.255.255"):
+        return None
+    return str(ip)
+
 
 class TopologyEngineWorker(BaseWorker):
-    """Maintain evidence-backed live communication relationships for the active session."""
+    """Maintain packet-proven communication relationships for the active session.
+
+    A topology node is created only when its IP was present in a packet captured by the
+    one managed TShark process. MON never creates guessed IP nodes, scan results or
+    synthetic physical hops.
+    """
 
     def __init__(self, bus: EventBus, state: LiveState, session_provider, network_provider) -> None:
         super().__init__("topology-engine", bus)
@@ -60,18 +82,16 @@ class TopologyEngineWorker(BaseWorker):
             old = current
         return round((alpha * current) + ((1.0 - alpha) * old), 2)
 
-    def _rates(self, key: str, packets: int, octets: int, previous: dict[str, Any]) -> tuple[float, float]:
+    def _rates(self, key: str, octets: int, previous: dict[str, Any]) -> tuple[float, float]:
         now = time.monotonic()
         prior = self._last_event_at.get(key)
         self._last_event_at[key] = now
         if prior is None:
             return float(previous.get("pps_ewma") or 0.0), float(previous.get("bps_ewma") or 0.0)
         elapsed = max(0.001, now - prior)
-        instant_pps = packets / elapsed
-        instant_bps = (octets * 8.0) / elapsed
         return (
-            self._ewma(previous.get("pps_ewma"), instant_pps),
-            self._ewma(previous.get("bps_ewma"), instant_bps),
+            self._ewma(previous.get("pps_ewma"), 1.0 / elapsed),
+            self._ewma(previous.get("bps_ewma"), (octets * 8.0) / elapsed),
         )
 
     async def run(self) -> None:
@@ -88,17 +108,23 @@ class TopologyEngineWorker(BaseWorker):
                     self._last_event_at.clear()
 
                 payload = dict(event.payload)
-                kind = str(payload.get("type") or "")
-                if kind not in {"PACKET", "FLOW_TELEMETRY"}:
+                if str(payload.get("type") or "") != "PACKET":
                     continue
 
-                src = str(payload.get("src_ip") or "").strip()
-                dst = str(payload.get("dst_ip") or "").strip()
+                src = _real_unicast_ip(payload.get("src_ip"))
+                dst = _real_unicast_ip(payload.get("dst_ip"))
                 if not src or not dst:
                     continue
 
-                packets = max(1, int(payload.get("packets") or 1))
-                octets = max(0, int(payload.get("bytes") or payload.get("length") or 0))
+                network = self.network_provider()
+                src_role = endpoint_role(src, network)
+                dst_role = endpoint_role(dst, network)
+                if src_role in _REJECT_ROLES or dst_role in _REJECT_ROLES:
+                    continue
+                if src_role not in _LOCAL_ROLES and dst_role not in _LOCAL_ROLES:
+                    continue
+
+                octets = max(0, int(payload.get("length") or 0))
                 protocol = str(payload.get("protocol") or "").strip()
                 transport = str(payload.get("transport") or protocol or "UNKNOWN").strip()
                 src_port = str(payload.get("src_port") or "").strip()
@@ -107,19 +133,7 @@ class TopologyEngineWorker(BaseWorker):
                 now = datetime.now(UTC).isoformat()
                 key = f"{src}>{dst}"
                 previous = self.state.get_edge(key)
-                network = self.network_provider()
-
-                protocol_counts = self._count(previous.get("protocols"), protocol or transport)
-                transport_counts = self._count(previous.get("transports"), transport)
-                source_ports = self._remember(previous.get("source_ports"), src_port)
-                destination_ports = self._remember(previous.get("destination_ports"), dst_port)
-                applications = self._remember(
-                    previous.get("applications"),
-                    self._application(payload),
-                    limit=8,
-                )
-                vlans = self._remember(previous.get("vlans"), vlan_id, limit=8)
-                pps_ewma, bps_ewma = self._rates(key, packets, octets, previous)
+                pps_ewma, bps_ewma = self._rates(key, octets, previous)
 
                 self.state.upsert_edge(
                     key,
@@ -128,21 +142,21 @@ class TopologyEngineWorker(BaseWorker):
                         "id": key,
                         "source": src,
                         "target": dst,
-                        "source_role": endpoint_role(src, network),
-                        "target_role": endpoint_role(dst, network),
+                        "source_role": src_role,
+                        "target_role": dst_role,
                         "first_seen": previous.get("first_seen", now),
                         "last_seen": now,
                         "observations": int(previous.get("observations", 0)) + 1,
-                        "packets": int(previous.get("packets", 0)) + packets,
+                        "packets": int(previous.get("packets", 0)) + 1,
                         "bytes": int(previous.get("bytes", 0)) + octets,
                         "pps_ewma": pps_ewma,
                         "bps_ewma": bps_ewma,
-                        "protocols": protocol_counts,
-                        "transports": transport_counts,
-                        "source_ports": source_ports,
-                        "destination_ports": destination_ports,
-                        "applications": applications,
-                        "vlans": vlans,
+                        "protocols": self._count(previous.get("protocols"), protocol or transport),
+                        "transports": self._count(previous.get("transports"), transport),
+                        "source_ports": self._remember(previous.get("source_ports"), src_port),
+                        "destination_ports": self._remember(previous.get("destination_ports"), dst_port),
+                        "applications": self._remember(previous.get("applications"), self._application(payload), limit=8),
+                        "vlans": self._remember(previous.get("vlans"), vlan_id, limit=8),
                         "last_protocol": protocol or transport,
                         "last_transport": transport,
                         "last_src_port": src_port or None,
@@ -152,12 +166,9 @@ class TopologyEngineWorker(BaseWorker):
                         "last_dns_query": payload.get("dns_query"),
                         "last_tls_sni": payload.get("tls_sni"),
                         "last_http_host": payload.get("http_host"),
-                        "evidence": (
-                            "FLOW_EXPORT" if kind == "FLOW_TELEMETRY" else "OBSERVED_COMMUNICATION"
-                        ),
-                        "exporter": payload.get("exporter") or previous.get("exporter"),
+                        "evidence": "TSHARK_PACKET_OBSERVED",
                     },
                 )
-                self.health.heartbeat(f"edges={len(self.state.snapshot()['topology_edges'])}")
+                self.health.heartbeat(f"packet_edges={len(self.state.snapshot()['topology_edges'])}")
         finally:
             await self.bus.unsubscribe(self.name)
