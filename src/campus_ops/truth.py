@@ -89,6 +89,7 @@ def assess_target_truth(snapshot: dict[str, Any], target: str) -> dict[str, Any]
     incident_count = sum(1 for item in incidents if _contains_ip(item, target))
 
     agent = _agent_for_ip(snapshot, target)
+    agent_online = bool(agent and str(agent.get("status") or "").upper() == "ONLINE")
     local = _is_local_address(ip, network)
     gateway = str(network.get("gateway") or "").strip() == target
     self_addresses = set(_network_values(network, "ipv4") + _network_values(network, "ipv6"))
@@ -101,7 +102,7 @@ def assess_target_truth(snapshot: dict[str, Any], target: str) -> dict[str, Any]
         and str(asset.get("confidence") or "").upper() == "HIGH"
         and str(asset.get("evidence") or "") == "CONFIRMED_LOCAL_SOURCE_FRAMES"
     )
-    manageable = bool(agent and confirmed_local and not gateway and not is_self)
+    manageable = bool(agent_online and confirmed_local and not gateway and not is_self)
 
     if manageable:
         status = "MANAGEABLE_ASSET"
@@ -120,6 +121,7 @@ def assess_target_truth(snapshot: dict[str, Any], target: str) -> dict[str, Any]
         "alerts": alert_count,
         "incidents": incident_count,
         "managed_agent": bool(agent),
+        "managed_agent_online": agent_online,
     }
     evidence_sources = sum(
         1
@@ -138,6 +140,7 @@ def assess_target_truth(snapshot: dict[str, Any], target: str) -> dict[str, Any]
         "is_gateway": gateway,
         "asset": asset,
         "managed_agent": agent,
+        "managed_agent_online": agent_online,
         "evidence": evidence,
         "evidence_sources": evidence_sources,
         "claim": "CURRENT_SESSION_EVIDENCE_ONLY",
