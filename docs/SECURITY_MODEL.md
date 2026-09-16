@@ -1,42 +1,28 @@
-# Security Model
+# MON Stable Security Model
 
-## Non-negotiable controls
+MON Stable 0.5.0 is a passive monitoring service. It observes traffic visible to the selected interface and derives current-session state from one managed TShark process.
 
-- Passive monitoring and host control are separate privilege domains.
-- Live state is current-session-only.
-- Every worker has explicit health and freshness state.
-- Remote-control actions require an enrolled/authorized endpoint and an explicit permission check.
-- Secrets are never hard-coded in source or committed to the repository.
-- Evidence exports are hashed and attributable to a session and incident.
-- External tool output is treated as untrusted input and parsed defensively.
-- A missing tool reduces capability; it does not silently substitute synthetic telemetry.
+## Privilege boundary
 
-## Roles
+The systemd service runs as the dedicated `campus-ops` account. Linux capture access is provided through the Wireshark group/dumpcap capabilities and the service capability set required for packet capture. The web console binds to loopback by default.
 
-- Observer: read-only telemetry
-- Analyst: investigate alerts and incidents
-- Responder: execute approved containment/evidence actions
-- Lab Administrator: manage enrolled lab endpoints and remote sessions
-- Platform Administrator: configuration, policy and platform lifecycle
+## Operator workspace
 
-## Response action policy
+Investigation and Forensics are local-only authenticated views. Their backend operates only on evidence already present in the current MON snapshot. It does not run ping, traceroute, Nmap, PowerShell, remote shell, isolation, quarantine or endpoint-control operations.
 
-Every response request must include:
+Override the local operator credential with:
 
-- operator identity
-- target endpoint identity
-- action type
-- reason / incident id
-- authorization decision
-- start/end timestamp
-- result
+```text
+CAMPUS_OPS_OPERATOR_USER=<operator>
+CAMPUS_OPS_OPERATOR_PASSWORD=<strong-password>
+```
 
-The platform will not implement unauthenticated or opportunistic takeover of arbitrary network-visible hosts.
+The development default exists for local lab convenience and should not be retained on a shared host.
 
-## Detection language
+## Data handling
 
-Use `indicator`, `suspected`, `likely`, and `confidence` when evidence is incomplete. Use definitive malware/attack labels only when a deterministic rule, trusted signature, verified artifact, or equivalent evidence supports them.
+Stable MON keeps live monitoring state in memory. The release does not mount the former forensic-capture/evidence-export, agent, response or secondary-sensor pipelines. Repository ignore rules exclude common packet-capture, key and evidence file types.
 
-## Fail-closed UI
+## Visibility and claims
 
-If the API, sensor, session, capture backend or required worker becomes invalid, affected live fields are cleared or explicitly marked unavailable. Historical values must never remain on screen as though they are current.
+An address observed in a packet is not automatically a local asset. Local asset promotion requires repeated local source-frame evidence. Communication edges are packet-observed relationships, not claimed physical network hops. Wider network visibility depends on legitimate sensor placement such as a SPAN/mirror port, TAP or gateway/bridge position.
