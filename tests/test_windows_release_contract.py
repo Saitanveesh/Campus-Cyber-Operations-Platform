@@ -1,14 +1,18 @@
 from pathlib import Path
 
 
-def test_windows_service_installs_exact_release_executable_name():
+def test_windows_release_paths_use_one_canonical_executable_name():
     build = Path("scripts/build_windows.ps1").read_text()
     service = Path("scripts/install_windows_service.ps1").read_text()
+    workflow = Path(".github/workflows/windows-build.yml").read_text()
 
-    assert "--name CampusOperationalConsole" in build
-    assert "dist\\CampusOperationalConsole.exe" in build
-    assert "dist\\CampusOperationalConsole.exe" in service
-    assert "dist\\CampusCyberOperationsPlatform.exe" not in service
+    assert "--name CampusCyberOperationsPlatform" in build
+    assert "dist\\CampusCyberOperationsPlatform.exe" in build
+    assert "dist\\CampusCyberOperationsPlatform.exe" in service
+    assert "--name CampusCyberOperationsPlatform" in workflow
+    assert "dist/CampusCyberOperationsPlatform.exe" in workflow
+    assert "CampusOperationalConsole.exe" not in build
+    assert "CampusOperationalConsole.exe" not in service
 
 
 def test_windows_service_runs_headless_with_auto_interface_selection():
