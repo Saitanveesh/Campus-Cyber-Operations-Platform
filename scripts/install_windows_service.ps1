@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root 'dist\CampusOperationalConsole.exe'
+$exe = Join-Path $root 'dist\CampusCyberOperationsPlatform.exe'
 
 if ($Remove) {
     if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
