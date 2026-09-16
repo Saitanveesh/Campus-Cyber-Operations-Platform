@@ -14,7 +14,7 @@ import psutil
 from campus_ops.tooling.registry import resolve_executable
 from campus_ops.workers.windows_network import discover_candidates, elect_network
 
-SERVICE_NAME = "CampusCyberOperationsPlatform"
+SERVICE_NAME = "MONWindows"
 PROGRAM_DATA = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "MON"
 DEPLOYMENT_FILE = PROGRAM_DATA / "deployment.json"
 
@@ -78,6 +78,25 @@ def _tshark_interfaces(tshark: str) -> tuple[bool, str]:
     return True, text
 
 
+def _npcap_state() -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            ["sc.exe", "query", "npcap"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"Npcap service query failed: {exc}"
+    text = ((result.stdout or "") + (result.stderr or "")).upper()
+    if result.returncode != 0:
+        return False, "Npcap driver/service is not installed"
+    if "RUNNING" not in text:
+        return False, "Npcap driver/service is installed but not running"
+    return True, "Npcap service is RUNNING"
+
+
 def _tshark_process_check(pid: object, capture_device: object) -> tuple[bool, str]:
     try:
         numeric_pid = int(pid or 0)
@@ -116,6 +135,10 @@ def check() -> dict[str, object]:
     if not service_ok:
         problems.append(service_detail)
 
+    npcap_ok, npcap_detail = _npcap_state()
+    if not npcap_ok:
+        problems.append(npcap_detail)
+
     tshark = resolve_executable("tshark")
     tshark_interfaces_ok = False
     tshark_interfaces_detail = "TShark is missing"
@@ -142,6 +165,8 @@ def check() -> dict[str, object]:
     elif status is not None:
         if str(status.get("runtime_profile") or "") != "windows-native-single-source":
             problems.append("MON is not running the Windows-native runtime profile")
+        if str(status.get("ip_truth_policy") or "") != "current-session-packet-evidence-only":
+            problems.append("MON IP truth policy is not the Windows packet-evidence policy")
         if not status.get("session_id"):
             problems.append("MON has no active monitoring session")
         network = status.get("network") if isinstance(status.get("network"), dict) else {}
@@ -167,6 +192,8 @@ def check() -> dict[str, object]:
 
     if not deployment.get("installed"):
         problems.append("Windows deployment manifest is missing; run .\\bootstrap.ps1 as Administrator")
+    elif deployment.get("profile") != "windows-native-single-source":
+        problems.append("Deployment manifest profile is not windows-native-single-source")
 
     problems = list(dict.fromkeys(problems))
     return {
@@ -174,6 +201,7 @@ def check() -> dict[str, object]:
         "profile": "windows-native-single-source",
         "problems": problems,
         "windows_service": {"verified": service_ok, "detail": service_detail},
+        "npcap": {"verified": npcap_ok, "detail": npcap_detail},
         "capture": {
             "engine": "TShark",
             "driver": "Npcap",
