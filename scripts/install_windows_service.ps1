@@ -60,7 +60,9 @@ if ($sourceHash -ne $installedHash) {
     throw 'Installed MONWindows.exe hash does not match the built artifact.'
 }
 
-$bin = '"' + $installedExe + '"'
+# MONWindows.exe contains a pywin32 ServiceFramework host. --service enters the
+# Service Control Manager dispatcher instead of starting the interactive/browser mode.
+$bin = '"' + $installedExe + '" --service'
 sc.exe create $ServiceName binPath= $bin start= delayed-auto DisplayName= $DisplayName | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'sc.exe create failed.' }
 sc.exe description $ServiceName 'Native Windows MON: one TShark/Npcap packet source, evidence-backed network monitoring.' | Out-Null
@@ -80,14 +82,16 @@ New-ItemProperty `
     -Force | Out-Null
 
 Start-Service -Name $ServiceName
-Start-Sleep -Seconds 2
+Start-Sleep -Seconds 3
 $service = Get-Service -Name $ServiceName
 if ($service.Status -ne 'Running') {
-    throw "Service $ServiceName did not reach RUNNING state."
+    $log = Join-Path $dataDir 'mon-service.log'
+    throw "Service $ServiceName did not reach RUNNING state. Check $log and Windows Event Viewer."
 }
 
 Write-Host "Installed and started $ServiceName"
-Write-Host "Executable: $installedExe"
+Write-Host "Executable: $installedExe --service"
 Write-Host "SHA-256: $installedHash"
 Write-Host "Data: $dataDir"
+Write-Host "Log: $(Join-Path $dataDir 'mon-service.log')"
 Write-Host 'Interface selection: auto (native Windows Wi-Fi/Ethernet preferred over virtual adapters)'
