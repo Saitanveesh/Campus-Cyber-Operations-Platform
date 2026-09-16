@@ -42,10 +42,15 @@ def _target_anomalies(snapshot: dict[str, Any], target: str) -> list[dict[str, A
 
 
 def build_path_report(snapshot: dict[str, Any], target: str) -> dict[str, Any]:
+    """Describe only packet-observed communication relationships for one real target."""
     truth = assess_target_truth(snapshot, target)
     live = snapshot.get("live") if isinstance(snapshot.get("live"), dict) else {}
     network = snapshot.get("network") if isinstance(snapshot.get("network"), dict) else {}
-    edges = [item for item in live.get("topology_edges", []) if isinstance(item, dict)]
+    edges = [
+        item
+        for item in live.get("topology_edges", [])
+        if isinstance(item, dict) and str(item.get("evidence") or "") == "TSHARK_PACKET_OBSERVED"
+    ]
 
     if not truth["observed"]:
         return {
@@ -55,7 +60,11 @@ def build_path_report(snapshot: dict[str, Any], target: str) -> dict[str, Any]:
             "known_boundary": network.get("gateway"),
             "physical_hops_verified": False,
             "physical_hops": [],
-            "statement": "Target is not observed in the current session; no communication path can be asserted.",
+            "statement": (
+                "Target was not observed in the current TShark capture. "
+                "MON will not construct a path for an unseen IP."
+            ),
+            "claim": "NO_PATH_WITHOUT_PACKET_EVIDENCE",
         }
 
     relationships: list[dict[str, Any]] = []
@@ -69,16 +78,17 @@ def build_path_report(snapshot: dict[str, Any], target: str) -> dict[str, Any]:
             {
                 "direction": "OUTBOUND" if source == truth["target"] else "INBOUND",
                 "peer": peer,
+                "peer_role": edge.get("target_role") if source == truth["target"] else edge.get("source_role"),
                 "packets": int(edge.get("packets") or 0),
                 "bytes": int(edge.get("bytes") or 0),
                 "pps_ewma": edge.get("pps_ewma"),
                 "bps_ewma": edge.get("bps_ewma"),
                 "protocol": edge.get("last_protocol") or edge.get("last_transport"),
-                "application": edge.get("last_application"),
+                "application": edge.get("last_application") or edge.get("last_tls_sni") or edge.get("last_dns_query") or edge.get("last_http_host"),
                 "destination_port": edge.get("last_dst_port"),
                 "first_seen": edge.get("first_seen"),
                 "last_seen": edge.get("last_seen"),
-                "evidence": edge.get("evidence") or "OBSERVED_COMMUNICATION",
+                "evidence": "TSHARK_PACKET_OBSERVED",
                 "anomalies": _target_anomalies(snapshot, peer),
             }
         )
@@ -87,18 +97,25 @@ def build_path_report(snapshot: dict[str, Any], target: str) -> dict[str, Any]:
         key=lambda item: (int(item.get("bytes") or 0), int(item.get("packets") or 0)),
         reverse=True,
     )
+    gateway = str(network.get("gateway") or "").strip() or None
     return {
         "target": truth["target"],
         "truth": truth,
         "relationships": relationships[:200],
-        "known_boundary": str(network.get("gateway") or "") or None,
+        "known_boundary": gateway,
+        "boundary_meaning": (
+            "Configured Windows default gateway for the selected adapter; it is a routing boundary, "
+            "not a claimed packet-by-packet physical hop."
+            if gateway
+            else "No default gateway is currently known for the selected adapter."
+        ),
         "physical_hops_verified": False,
         "physical_hops": [],
         "statement": (
-            "MON asserts packet-observed communication relationships and the selected gateway boundary only. "
-            "It does not invent switch or router hops."
+            "Every relationship below came from the current TShark packet stream. "
+            "MON does not invent switches, routers, endpoints, or hop-by-hop paths."
         ),
-        "claim": "COMMUNICATION_PATH_NOT_PHYSICAL_HOP_INFERENCE",
+        "claim": "CURRENT_SESSION_TSHARK_RELATIONSHIPS_ONLY",
     }
 
 
@@ -110,16 +127,22 @@ def install_path_analysis(app: FastAPI) -> FastAPI:
     @app.get("/api/v1/pathspace/{target}")
     async def pathspace_target(target: str) -> dict[str, Any]:
         try:
-            return build_path_report(app.state.orchestrator.snapshot(), target)
+            report = build_path_report(app.state.orchestrator.snapshot(), target)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not report.get("truth", {}).get("observed"):
+            raise HTTPException(status_code=404, detail=report["statement"])
+        return report
 
     @app.get("/api/v1/system/physical-topology-evidence")
     async def physical_topology_evidence() -> dict[str, object]:
         return {
             "links": [],
             "physical_hops_verified": False,
-            "statement": "No infrastructure telemetry is enabled in stable single-source mode.",
+            "statement": (
+                "Native Windows MON currently has packet evidence and Windows routing context only; "
+                "it does not claim switch/router hop discovery."
+            ),
         }
 
     return app
