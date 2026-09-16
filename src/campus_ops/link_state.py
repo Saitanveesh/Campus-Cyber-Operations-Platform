@@ -8,7 +8,7 @@ from typing import Any
 import psutil
 from fastapi import FastAPI
 
-from campus_ops.workers.network_discovery import classify_interface
+from campus_ops.workers.windows_network import classify_interface
 
 
 def _run(command: list[str], timeout: float = 3.0) -> str:
@@ -101,7 +101,6 @@ def _medium(name: str, wlan: dict[str, Any] | None) -> str:
     return {
         "wireless": "WIFI",
         "ethernet": "ETHERNET",
-        "tunnel": "TUNNEL",
         "virtual": "VIRTUAL",
         "loopback": "LOOPBACK",
     }.get(category, "OTHER")
@@ -125,7 +124,7 @@ def collect_link_state(app: FastAPI) -> dict[str, Any]:
         interfaces.append(
             {
                 "name": name,
-                "selected": bool(selected and name == selected),
+                "selected": bool(selected and name.casefold() == selected.casefold()),
                 "medium": _medium(name, wlan),
                 "state": "UP" if stat.isup else "DOWN",
                 "speed_mbps": int(stat.speed or 0),
@@ -143,21 +142,16 @@ def collect_link_state(app: FastAPI) -> dict[str, Any]:
             }
         )
 
-    # Do not invent a selected interface by falling back to the first UP adapter. The
-    # selected/active row must correspond to the interface MON actually elected.
     active = next((row for row in interfaces if row["selected"]), None)
-
     return {
         "selected_interface": selected or None,
         "active": active,
         "interfaces": interfaces,
-        "supports_wifi_channel_state": any(
-            row.get("medium") == "WIFI" for row in interfaces
-        ),
+        "supports_wifi_channel_state": any(row.get("medium") == "WIFI" for row in interfaces),
         "truth_note": (
-            "The selected interface is the interface MON actually captures from. "
-            "Wi-Fi channel fields come from a local WLAN adapter when the host exposes "
-            "one; virtualized environments may expose only a virtual Ethernet capture interface."
+            "Native Windows mode reports the same adapter alias MON elected for capture. "
+            "Wi-Fi details are read from the local Windows WLAN stack; Ethernet details "
+            "come from the Windows adapter state."
         ),
     }
 
