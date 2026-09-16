@@ -14,8 +14,8 @@ command -v git >/dev/null 2>&1 || fail "git is required. Install it with: sudo a
 source /etc/os-release
 
 case "${ID:-}" in
-    ubuntu) installer="scripts/install_ubuntu_stable.sh" ; stable_mode=true ;;
-    kali) installer="scripts/install_kali.sh" ; stable_mode=false ;;
+    ubuntu) installer="scripts/install_ubuntu_stable.sh" ;;
+    kali) installer="scripts/install_kali.sh" ;;
     *) fail "Supported deployment hosts are Ubuntu 22.04+ and Kali Linux. Detected: ${PRETTY_NAME:-unknown}." ;;
 esac
 
@@ -33,20 +33,8 @@ fi
 info "Updating $BRANCH from GitHub."
 git pull --ff-only origin "$BRANCH"
 
-if $stable_mode; then
-    info "Installing stable Ubuntu profile: TShark is the only live packet source."
-    sudo bash "$installer" --interface auto
-else
-    info "Installing Kali profile."
-    installer_status=0
-    sudo bash "$installer" --interface auto || installer_status=$?
-    if [[ "$installer_status" -ne 0 && "$installer_status" -ne 2 ]]; then
-        fail "Installer stopped with fatal status $installer_status."
-    fi
-fi
-
-info "Deploying current monitor-v1 source into the managed virtual environment."
-sudo /opt/campus-ops/venv/bin/python -m pip install --force-reinstall --no-deps "$root"
+info "Installing stable single-source profile."
+sudo bash "$installer" --interface auto
 
 build_commit="$(git rev-parse HEAD)"
 build_branch="$(git branch --show-current)"
