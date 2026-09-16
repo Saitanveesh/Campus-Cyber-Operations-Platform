@@ -5,9 +5,9 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
-from campus_ops.admin import install_admin_routes
 from campus_ops.admin_ui import ADMIN_EXTENSION
 from campus_ops.pathspace_ui import PATHSPACE_EXTENSION
+from campus_ops.stable_operator import install_stable_operator_routes
 from campus_ops.topology_ui import TOPOLOGY_EXTENSION
 
 
@@ -198,10 +198,9 @@ def install_stable_ui(app: FastAPI) -> FastAPI:
         return app
     app.state.stable_ui_installed = True
 
-    # Protected investigation routes are local-only. Stable mode does not start
-    # response/containment workers; only passive investigation and forensic views are
-    # promoted into the primary navigation.
-    install_admin_routes(app)
+    # Stable mode mounts authentication plus passive target/forensic routes only.
+    # Active probe, remote-console and containment endpoints are intentionally absent.
+    install_stable_operator_routes(app)
 
     @app.middleware("http")
     async def stable_console(request: Request, call_next):
