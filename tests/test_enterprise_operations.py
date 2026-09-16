@@ -2,17 +2,15 @@ from campus_ops.enterprise_operations import SoarExecuteRequest, soar_plan
 from campus_ops.main import build_app
 
 
-def test_enterprise_operations_routes_installed(tmp_path, monkeypatch):
+def test_stable_runtime_excludes_enterprise_operations_routes(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     app = build_app()
     paths = {getattr(route, "path", "") for route in app.routes}
-    assert "/api/v1/system/identity-context" in paths
-    assert "/api/v1/system/resilience" in paths
-    assert "/api/v1/admin/identity/{target}" in paths
-    assert "/api/v1/admin/soar/{target}" in paths
-    assert "/api/v1/admin/soar/{target}/execute" in paths
-    assert "/api/v1/admin/evidence-export/{target}" in paths
-    assert app.state.enterprise_operations_installed is True
+    assert "/api/v1/system/identity-context" not in paths
+    assert "/api/v1/admin/soar/{target}" not in paths
+    assert "/api/v1/isolation/{target}" in paths
+    assert "/api/v1/system/diagnostics" in paths
+    assert getattr(app.state, "enterprise_operations_installed", False) is False
 
 
 def test_soar_plan_is_guarded_without_managed_agent(tmp_path, monkeypatch):
