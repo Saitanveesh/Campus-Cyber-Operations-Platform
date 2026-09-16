@@ -295,6 +295,9 @@ def build_system_diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
 def isolation_capability(snapshot: dict[str, Any], target: str) -> dict[str, Any]:
     truth = assess_target_truth(snapshot, target)
     reasons: list[str] = []
+    agent = truth.get("managed_agent") if isinstance(truth.get("managed_agent"), dict) else None
+    platform = str((agent or {}).get("platform") or "").lower()
+
     if not truth["observed"]:
         reasons.append("target is not observed in the current session")
     if not truth["local_scope"]:
@@ -305,14 +308,18 @@ def isolation_capability(snapshot: dict[str, Any], target: str) -> dict[str, Any
         reasons.append("MON will not isolate its own monitoring address")
     if truth["is_gateway"]:
         reasons.append("MON will not isolate the active default gateway")
-    if not truth["managed_agent"]:
+    if agent is None:
         reasons.append("no authenticated endpoint agent provides a control path")
+    elif not truth.get("managed_agent_online"):
+        reasons.append("endpoint agent is offline; no live authenticated control path")
+    elif platform != "windows":
+        reasons.append("current endpoint isolation backend supports Windows agents only")
 
     available = not reasons
     return {
         "target": truth["target"],
         "available": available,
-        "control_method": "AUTHENTICATED_ENDPOINT_AGENT" if available else "NONE",
+        "control_method": "WINDOWS_FIREWALL_ENDPOINT_AGENT" if available else "NONE",
         "truth": truth,
         "reasons": reasons,
         "claim": "ISOLATION_REQUIRES_CONFIRMED_TARGET_AND_REAL_CONTROL_PATH",
@@ -394,9 +401,12 @@ def install_operational_core(app: FastAPI) -> FastAPI:
             capability = isolation_capability(orchestrator.snapshot(), target)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        agent = capability["truth"].get("managed_agent")
-        if not isinstance(agent, dict) or not agent.get("endpoint_id"):
-            raise HTTPException(status_code=409, detail="no authenticated endpoint agent control path")
+        if not capability["available"]:
+            raise HTTPException(
+                status_code=409,
+                detail={"state": "RESTORE_UNAVAILABLE", "reasons": capability["reasons"]},
+            )
+        agent = capability["truth"]["managed_agent"]
         job = await orchestrator.response.queue(
             endpoint_id=str(agent["endpoint_id"]),
             action="RESTORE_NETWORK",
@@ -406,7 +416,7 @@ def install_operational_core(app: FastAPI) -> FastAPI:
         return {
             "state": "RESTORE_QUEUED",
             "target": capability["target"],
-            "control_method": "AUTHENTICATED_ENDPOINT_AGENT",
+            "control_method": capability["control_method"],
             "job": job,
         }
 
