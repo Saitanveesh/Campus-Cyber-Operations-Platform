@@ -29,7 +29,7 @@ build = [
 campus-ops = "campus_ops.main:main"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = {"" = "src"]
 include-package-data = true
 
 [tool.setuptools.packages.find]
@@ -47,7 +47,11 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint.per-file-ignores]
+"src/campus_ops/diagnostic_ui.py" = ["I001"]
+"src/campus_ops/pathspace_ui.py" = ["I001"]
 "src/campus_ops/stable_operator_ui.py" = ["I001"]
+"src/campus_ops/stable_ui.py" = ["I001"]
+"src/campus_ops/topology_ui.py" = ["I001"]
 "src/campus_ops/workers/asset_engine.py" = ["I001"]
 "src/campus_ops/workers/flow_engine.py" = ["I001"]
 "src/campus_ops/workers/incidents.py" = ["I001"]
