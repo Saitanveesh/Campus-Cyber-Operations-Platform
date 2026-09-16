@@ -1,7 +1,7 @@
 name: ubuntu-ci
 on:
   push:
-    branches: [monitor-v1, 'codex/ubuntu-*']
+    branches: [monitor-v1]
   pull_request:
     branches: [monitor-v1, main]
 
@@ -31,9 +31,9 @@ jobs:
           python -m pip install -r requirements.lock
           python -m pip install --no-deps -e .
           python -m pip check
-      - name: Lint
-        run: ruff check src tests scripts/configure_ubuntu.py
-      - name: Validate installers and bootstrap
+      - name: Lint stable source and tests
+        run: ruff check src tests
+      - name: Validate bootstrap scripts
         run: |
           bash -n bootstrap.sh
           bash -n scripts/install_ubuntu_stable.sh
@@ -58,7 +58,6 @@ jobs:
         shell: bash
         run: |
           sudo bash scripts/install_ubuntu_stable.sh --interface auto
-          sudo systemctl restart campus-ops.service
           sudo bash scripts/wait_for_console.sh --timeout 60
           sudo /opt/campus-ops/venv/bin/python - <<'PY'
           from campus_ops.deployment_check import check
@@ -75,8 +74,11 @@ jobs:
           assert runtime.get('interface') not in {None, 'any', 'lo'}, runtime
           assert int(runtime.get('process_pid') or 0) > 0, runtime
           PY
-      - name: Verify parallel managed sensors are disabled
+      - name: Verify legacy services and configuration are absent
         run: |
+          test ! -e /etc/campus-ops/managed-feeds.env
+          test ! -e /etc/systemd/system/campus-ops-sensor@.service
+          test ! -e /etc/systemd/system/campus-ops-falco.service
           for unit in \
             campus-ops-sensor@zeek.service \
             campus-ops-sensor@suricata.service \
@@ -95,7 +97,7 @@ jobs:
               status = json.load(r)
           assert status['runtime_profile'] == 'stable-single-source', status
           assert status['authoritative_packet_source'] == 'tshark', status
-          assert status['version'] == '0.4.2', status
+          assert status['version'] == '0.5.0', status
           assert status['network_identity_confirmations'] == 3, status
           assert status.get('session_id'), status
           assert isinstance(status.get('network'), dict) and status['network'].get('interface'), status
