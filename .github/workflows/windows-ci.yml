@@ -36,7 +36,13 @@ jobs:
       - name: PowerShell syntax gate
         shell: pwsh
         run: |
-          $files = @('bootstrap.ps1','scripts/build_windows.ps1','scripts/install_windows_service.ps1','scripts/diagnose_windows.ps1')
+          $files = @(
+            'bootstrap.ps1',
+            'scripts/build_windows.ps1',
+            'scripts/install_windows_service.ps1',
+            'scripts/diagnose_windows.ps1',
+            'scripts/self_test_windows.ps1'
+          )
           foreach ($file in $files) {
             [void][ScriptBlock]::Create((Get-Content -Raw $file))
             Write-Host "Parsed $file"
