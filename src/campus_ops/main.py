@@ -6,11 +6,10 @@ import webbrowser
 
 import uvicorn
 
-from campus_ops.api import create_app
 from campus_ops.config import DEFAULT_SETTINGS
 from campus_ops.link_state import install_link_state
-from campus_ops.operational_core import install_operational_core
 from campus_ops.path_analysis import install_path_analysis
+from campus_ops.stable_api import create_stable_app
 from campus_ops.stable_orchestrator import StableOrchestrator
 from campus_ops.stable_ui import install_stable_ui
 from campus_ops.version_api import install_version_api
@@ -24,17 +23,10 @@ def _open_console() -> None:
 
 
 def build_app():
-    """Build the stable monitor-v1 runtime.
-
-    TShark remains the single authoritative packet source. Operational truth,
-    investigation, anomaly correlation, diagnostics, path analysis, watchdog and
-    isolation APIs are mounted as backend-only capabilities; the capture worker and
-    current UI are left unchanged.
-    """
-    app = create_app(StableOrchestrator())
+    """Build MON's lean passive single-source runtime."""
+    app = create_stable_app(StableOrchestrator())
     app = install_link_state(app)
     app = install_version_api(app)
-    app = install_operational_core(app)
     app = install_path_analysis(app)
     app = install_watchdog_api(app)
     app = install_stable_ui(app)
