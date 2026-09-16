@@ -7,13 +7,30 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from campus_ops.deployment import deployment_status
 from campus_ops.tooling.registry import resolve_executable
 from campus_ops.workers.network_discovery import discover_candidates, elect_network
 
 _CAP_NET_ADMIN = 12
 _CAP_NET_RAW = 13
 _REQUIRED_CAPTURE_MASK = (1 << _CAP_NET_ADMIN) | (1 << _CAP_NET_RAW)
+_DEPLOYMENT_FILE = Path("/etc/campus-ops/deployment.json")
+
+
+def _deployment_status() -> dict[str, object]:
+    if not _DEPLOYMENT_FILE.exists():
+        return {"installed": False, "profile": None, "components": {}}
+    try:
+        raw = json.loads(_DEPLOYMENT_FILE.read_text())
+    except (OSError, ValueError) as exc:
+        return {"installed": False, "profile": None, "components": {}, "error": str(exc)}
+    if not isinstance(raw, dict):
+        return {"installed": False, "profile": None, "components": {}, "error": "invalid manifest"}
+    return {
+        "installed": True,
+        "profile": raw.get("profile"),
+        "completed_at": raw.get("completed_at"),
+        "components": raw.get("components") if isinstance(raw.get("components"), dict) else {},
+    }
 
 
 def _managed_service_capability_check() -> tuple[bool, str]:
@@ -52,7 +69,6 @@ def _managed_service_capability_check() -> tuple[bool, str]:
 
 
 def _tshark_capture_check(interface: str, tshark: str) -> tuple[bool, str]:
-    """Fallback capture probe used only when the managed runtime is not active."""
     try:
         result = subprocess.run(
             [
@@ -124,8 +140,8 @@ def _console_status() -> tuple[dict[str, object] | None, str | None]:
         return None, f"Console unavailable on 127.0.0.1:8765: {exc}"
 
 
-def check() -> dict:
-    deployment = deployment_status()
+def check() -> dict[str, object]:
+    deployment = _deployment_status()
     problems: list[str] = []
     tshark = resolve_executable("tshark")
     if not tshark:
@@ -144,9 +160,7 @@ def check() -> dict:
         runtime_profile = str(console_status.get("runtime_profile") or "")
         if runtime_profile != "stable-single-source":
             problems.append(f"Unexpected runtime profile: {runtime_profile or 'missing'}")
-
-        session_id = console_status.get("session_id")
-        if not session_id:
+        if not console_status.get("session_id"):
             problems.append("Runtime has no active monitoring session")
 
         network = console_status.get("network")
@@ -168,44 +182,34 @@ def check() -> dict:
                     problems.append(f"Runtime worker {worker_name} is {state}, expected HEALTHY")
 
         live = console_status.get("live")
-        if isinstance(live, dict):
-            raw_capture = live.get("capture")
-            if isinstance(raw_capture, dict):
-                runtime_capture = raw_capture
-                state = str(runtime_capture.get("state") or "UNKNOWN").upper()
-                backend = str(runtime_capture.get("backend") or "")
-                capture_interface = str(runtime_capture.get("interface") or "") or None
-                process_pid = runtime_capture.get("process_pid")
-
-                if state != "ACTIVE":
-                    problems.append(
-                        "Runtime capture is not ACTIVE: "
-                        + str(runtime_capture.get("detail") or state)
-                    )
-                if backend != "tshark":
-                    problems.append(
-                        f"Runtime capture backend is {backend or 'missing'}, expected tshark"
-                    )
-                if not capture_interface:
-                    problems.append("Runtime capture has no bound interface")
-                if (
-                    runtime_interface
-                    and capture_interface
-                    and runtime_interface != capture_interface
-                ):
-                    problems.append(
-                        "Runtime network/capture interface mismatch: "
-                        f"network={runtime_interface} capture={capture_interface}"
-                    )
-                runtime_process_ok, runtime_process_detail = _tshark_process_check(
-                    process_pid, capture_interface
+        if isinstance(live, dict) and isinstance(live.get("capture"), dict):
+            runtime_capture = live["capture"]
+            state = str(runtime_capture.get("state") or "UNKNOWN").upper()
+            backend = str(runtime_capture.get("backend") or "")
+            capture_interface = str(runtime_capture.get("interface") or "") or None
+            if state != "ACTIVE":
+                problems.append(
+                    "Runtime capture is not ACTIVE: "
+                    + str(runtime_capture.get("detail") or state)
                 )
-                if not runtime_process_ok:
-                    problems.append(runtime_process_detail)
-            else:
-                problems.append("Runtime capture status is missing")
+            if backend != "tshark":
+                problems.append(
+                    f"Runtime capture backend is {backend or 'missing'}, expected tshark"
+                )
+            if not capture_interface:
+                problems.append("Runtime capture has no bound interface")
+            if runtime_interface and capture_interface and runtime_interface != capture_interface:
+                problems.append(
+                    "Runtime network/capture interface mismatch: "
+                    f"network={runtime_interface} capture={capture_interface}"
+                )
+            runtime_process_ok, runtime_process_detail = _tshark_process_check(
+                runtime_capture.get("process_pid"), capture_interface
+            )
+            if not runtime_process_ok:
+                problems.append(runtime_process_detail)
         else:
-            problems.append("Runtime live status is missing")
+            problems.append("Runtime capture status is missing")
 
     try:
         selected = elect_network(discover_candidates())
@@ -213,7 +217,6 @@ def check() -> dict:
         selected = None
         if runtime_interface is None:
             problems.append(f"Network discovery check failed: {exc}")
-
     if selected is None and runtime_interface is None:
         problems.append("No eligible active network interface")
 
@@ -235,14 +238,12 @@ def check() -> dict:
         capture["runtime"] = runtime_capture
 
     if runtime_process_ok and runtime_capture is not None:
-        state = str(runtime_capture.get("state") or "").upper()
-        backend = str(runtime_capture.get("backend") or "")
-        capture["verified"] = state == "ACTIVE" and backend == "tshark"
+        capture["verified"] = (
+            str(runtime_capture.get("state") or "").upper() == "ACTIVE"
+            and str(runtime_capture.get("backend") or "") == "tshark"
+        )
         capture["detail"] = runtime_process_detail
     elif verification_interface and tshark:
-        # The healthy path above validates the real managed TShark process and avoids
-        # opening a second capture handle. This fallback is only diagnostic when MON is
-        # not yet active.
         verified, detail = _tshark_capture_check(verification_interface, tshark)
         capture["verified"] = verified
         capture["detail"] = detail
@@ -251,11 +252,11 @@ def check() -> dict:
 
     if not capture["verified"]:
         problems.append("Managed TShark runtime is not verified")
-
     if not deployment.get("installed"):
         problems.append("No installation manifest; run bash bootstrap.sh")
+    elif deployment.get("profile") != "stable-single-source":
+        problems.append("Installation manifest is not stable-single-source")
 
-    # Preserve order while avoiding duplicate root-cause lines.
     problems = list(dict.fromkeys(problems))
     return {
         "state": "READY" if not problems else "PARTIAL",
