@@ -1,5 +1,6 @@
-# Portable monitor-v1 dependency constraints.
-# Do not freeze transitive packages from one CI image: Ubuntu/Kali mirrors can differ.
+# MON Windows dependency constraints.
+# Keep top-level packages range-bounded; do not pin a CI machine's transitive graph.
+
 # Runtime
 fastapi>=0.116,<1
 uvicorn[standard]>=0.35,<1
