@@ -5,6 +5,7 @@ import ipaddress
 from fastapi import FastAPI, HTTPException, Request
 
 from campus_ops.investigation import build_investigation
+from campus_ops.workers.evidence_store import EvidenceStoreWorker
 
 
 def _local_request(request: Request) -> bool:
@@ -77,9 +78,6 @@ def _observed_targets(snapshot: dict[str, object]) -> list[dict[str, object]]:
             if last_seen and str(last_seen) > str(row.get("last_seen") or ""):
                 row["last_seen"] = last_seen
 
-    # A topology-only address is accepted only when the edge explicitly says it came
-    # from the TShark packet stream. This prevents stale/synthetic topology nodes from
-    # becoming investigation targets.
     for edge in edges:
         if str(edge.get("evidence") or "") != "TSHARK_PACKET_OBSERVED":
             continue
@@ -143,6 +141,14 @@ def install_stable_operator_routes(app: FastAPI) -> FastAPI:
                     "MON will not fabricate an investigation for an unseen IP."
                 ),
             )
+        history = EvidenceStoreWorker.query_ip(str(report["target"]), limit=100)
+        report["history"] = {
+            "event_count": len(history.get("events", [])),
+            "snapshot_count": len(history.get("snapshots", [])),
+            "recent_events": history.get("events", [])[:25],
+            "retention_days": history.get("retention_days"),
+            "claim": history.get("claim"),
+        }
         return report
 
     return app
