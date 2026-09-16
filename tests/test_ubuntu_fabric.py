@@ -268,22 +268,19 @@ def test_invalid_policy_fails_closed(args):
         RiskPolicy(**args)
 
 
-def test_one_zeek_and_syslog_owner_and_admin_routes(tmp_path, monkeypatch):
+def test_stable_runtime_has_one_packet_source_and_no_parallel_fabric_services(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     app = build_app()
     orch = app.state.orchestrator
-    assert sum(worker.name == "zeek-feed" for worker in orch.workers) == 1
-    assert app.state.passive_syslog is orch.syslog
-    assert app.state.zeek_adapter._task is None
+    names = {worker.name for worker in orch.workers}
+    assert "capture" in names
+    assert "zeek-feed" not in names
+    assert "suricata-feed" not in names
+    assert "syslog-receiver" not in names
+
     client = TestClient(app)
-    assert client.get("/api/v1/system/evidence-graph").status_code == 401
-    assert client.post("/api/v1/admin/validation-runs", json={
-        "subject": "endpoint", "origin": "falco", "rule": "test"
-    }).status_code == 401
-    state = client.get("/api/v1/system/autonomy").json()
-    assert state["automatic_containment_enabled"] is False
-    # Keep the policy fields consumed by the frozen autonomy panel.
-    assert state["policy"]["isolation_threshold"] == 85
-    assert state["policy"]["minimum_independent_sources"] == 2
-    assert state["policy"]["minimum_high_confidence_events"] == 0
-    app.state.operations_fabric.store.close()
+    assert client.get("/api/v1/system/watchdog").status_code == 200
+    assert client.get("/api/v1/system/diagnostics").status_code == 200
+    assert client.get("/api/v1/anomalies").status_code == 200
+    assert client.get("/api/v1/pathspace/10.10.10.10").status_code == 200
+    assert client.get("/api/v1/isolation/10.10.10.10").status_code == 200
