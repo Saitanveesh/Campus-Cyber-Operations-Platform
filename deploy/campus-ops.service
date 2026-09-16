@@ -18,11 +18,8 @@ EnvironmentFile=-/etc/campus-ops/sensors.env
 EnvironmentFile=/etc/campus-ops/campus-ops.env
 Environment=PATH=/opt/zeek/bin:/opt/campus-ops/opencanary/bin:/opt/campus-ops/analysis/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# The main process owns the live packet worker. Linux acquisition is performed by
-# dumpcap/tcpdump children, so the service must carry the same narrowly scoped network
-# capabilities already used by campus-ops-sensor@.service. File capabilities alone are
-# not sufficient on every systemd/WSL/containerized Ubuntu environment because the
-# service execution context can differ from an interactive/runuser verification.
+# MON manages one live TShark child. On Linux, TShark may invoke dumpcap internally,
+# so the service receives only the packet-capture capabilities required by that path.
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 NoNewPrivileges=true
@@ -31,6 +28,7 @@ ExecStart=/opt/campus-ops/venv/bin/python -m campus_ops
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
+KillMode=control-group
 UMask=0027
 ProtectSystem=strict
 ProtectHome=true
