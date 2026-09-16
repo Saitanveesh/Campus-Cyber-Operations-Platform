@@ -2,15 +2,14 @@ from campus_ops.enterprise_detection import _entropy, segmentation_policy_report
 from campus_ops.main import build_app
 
 
-def test_enterprise_detection_routes_installed(tmp_path, monkeypatch):
+def test_stable_runtime_uses_core_anomaly_api_not_enterprise_detection_routes(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     app = build_app()
     paths = {getattr(route, "path", "") for route in app.routes}
-    assert "/api/v1/system/segmentation-policy" in paths
-    assert "/api/v1/system/dns-tls-anomalies" in paths
-    assert "/api/v1/system/sigma" in paths
-    assert "/api/v1/admin/command-center/{target}" in paths
-    assert app.state.enterprise_detection_installed is True
+    assert "/api/v1/anomalies" in paths
+    assert "/api/v1/system/segmentation-policy" not in paths
+    assert "/api/v1/system/sigma" not in paths
+    assert getattr(app.state, "enterprise_detection_installed", False) is False
 
 
 def test_segmentation_policy_fails_closed_without_policy(tmp_path, monkeypatch):
