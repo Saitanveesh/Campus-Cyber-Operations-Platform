@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
+from campus_ops.diagnostic_ui import DIAGNOSTIC_EXTENSION
 from campus_ops.pathspace_ui import PATHSPACE_EXTENSION
 from campus_ops.stable_operator import install_stable_operator_routes
 from campus_ops.stable_operator_ui import STABLE_OPERATOR_EXTENSION
@@ -24,7 +25,7 @@ _STABLE_LABEL = r"""
 
 
 def install_stable_ui(app: FastAPI) -> FastAPI:
-    """Serve the stable-only console and passive operator workspaces."""
+    """Serve the stable-only console and local operator workspaces."""
     if getattr(app.state, "stable_ui_installed", False):
         return app
     app.state.stable_ui_installed = True
@@ -44,6 +45,7 @@ def install_stable_ui(app: FastAPI) -> FastAPI:
                     f"{TOPOLOGY_EXTENSION}\n"
                     f"{PATHSPACE_EXTENSION}\n"
                     f"{STABLE_OPERATOR_EXTENSION}\n"
+                    f"{DIAGNOSTIC_EXTENSION}\n"
                     f"{_STABLE_LABEL}\n"
                     "</body>"
                 ),
