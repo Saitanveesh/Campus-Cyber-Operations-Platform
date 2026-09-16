@@ -9,10 +9,11 @@ from campus_ops.stable_orchestrator import StableOrchestrator
 
 
 def create_stable_app(orchestrator: StableOrchestrator | None = None) -> FastAPI:
-    """Create the stable passive MON API.
+    """Create the native Windows MON API.
 
-    No endpoint-agent control, remote shell, active probe, quarantine, isolation,
-    secondary sensor feed, voice or legacy tool-hub routes are mounted here.
+    No active probe, remote shell, isolation, secondary sensor feed, scanner or legacy
+    Admin/tool-hub routes are mounted. Browser voice is presentation-only and consumes
+    the same watchdog/security data; it is not a second analysis pipeline.
     """
     orch = orchestrator or StableOrchestrator()
 
@@ -25,8 +26,8 @@ def create_stable_app(orchestrator: StableOrchestrator | None = None) -> FastAPI
             await orch.stop()
 
     app = FastAPI(
-        title="Campus Cyber Operations Platform",
-        version="0.5.0",
+        title="MON Windows Network Monitor",
+        version="1.0.0",
         lifespan=lifespan,
     )
     app.state.orchestrator = orch
@@ -54,6 +55,7 @@ def create_stable_app(orchestrator: StableOrchestrator | None = None) -> FastAPI
                 "incidents": len(live["incidents"]),
             },
             "visibility_mode": live["visibility_mode"],
+            "ip_truth_policy": snapshot.get("ip_truth_policy"),
         }
 
     @app.get("/api/v1/live/network")
@@ -131,6 +133,7 @@ def create_stable_app(orchestrator: StableOrchestrator | None = None) -> FastAPI
             "workers": snapshot["workers"],
             "event_bus": snapshot["event_bus"],
             "runtime_profile": snapshot["runtime_profile"],
+            "ip_truth_policy": snapshot.get("ip_truth_policy"),
         }
 
     @app.websocket("/api/v1/live/ws")
