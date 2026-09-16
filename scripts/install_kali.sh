@@ -1,101 +1,33 @@
 #!/usr/bin/env bash
-# Kali Linux deployment path for monitor-v1. Run through bootstrap.sh or with sudo.
 set -euo pipefail
 
-profile=full
 interface=auto
 while (($#)); do
     case "$1" in
-        --profile) profile="${2:?Missing profile}"; shift 2 ;;
         --interface) interface="${2:?Missing interface}"; shift 2 ;;
-        --plan) plan=true; shift ;;
         -h|--help)
-            echo 'Usage: sudo bash scripts/install_kali.sh [--profile full|core] [--interface auto|NAME] [--plan]'
+            echo 'Usage: sudo bash scripts/install_kali.sh [--interface auto|NAME]'
             exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 64 ;;
     esac
 done
-plan=${plan:-false}
-[[ "$profile" == full || "$profile" == core ]] || { echo 'Profile must be full or core'; exit 64; }
-[[ "$interface" =~ ^[a-zA-Z0-9_.:@-]+$ ]] || { echo 'Invalid interface selector'; exit 64; }
 
-if $plan; then
-    echo "Platform: Kali Linux; profile: $profile; interface: $interface"
-    echo 'Core: Python 3.12+, TShark/dumpcap, Wireshark, tcpdump, iproute2/iw, Nmap, YARA, Zeek and Suricata.'
-    [[ "$profile" == core ]] || echo 'Full: OpenCanary, ClamAV, bpftrace, BCC and flow utilities where Kali packages support them.'
-    exit 0
-fi
-
-[[ "$(id -u)" == 0 ]] || { echo 'Run with sudo bash scripts/install_kali.sh'; exit 1; }
-# shellcheck disable=SC1091
+[[ "$(id -u)" == 0 ]] || { echo 'Run with sudo.' >&2; exit 1; }
+[[ "$interface" =~ ^[a-zA-Z0-9_.:@-]+$ ]] || { echo 'Invalid interface selector.' >&2; exit 64; }
 source /etc/os-release
-[[ "${ID:-}" == kali ]] || { echo "Kali Linux is required by this installer; detected ${PRETTY_NAME:-unknown}." >&2; exit 1; }
-[[ "$(cat /proc/1/comm)" == systemd ]] || { echo 'A systemd Kali host is required.' >&2; exit 78; }
+[[ "${ID:-}" == kali ]] || { echo 'This installer is for Kali Linux.' >&2; exit 1; }
+[[ "$(cat /proc/1/comm)" == systemd ]] || { echo 'A normal systemd Kali host is required.' >&2; exit 78; }
 
 project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 report_dir=/var/lib/campus-ops/install
-install -d -m 0755 "$report_dir" /opt/campus-ops /etc/apt/keyrings
+install -d -m 0755 "$report_dir" /opt/campus-ops /etc/campus-ops
 exec > >(tee -a "$report_dir/bootstrap.log") 2>&1
-trap 'echo "Kali bootstrap stopped at line $LINENO. Log: /var/lib/campus-ops/install/bootstrap.log"' ERR
-
-component() {
-    local name="$1"; shift
-    rm -f "$report_dir/$name.ok" "$report_dir/$name.failed" "$report_dir/$name.blocked" "$report_dir/$name.external"
-    if "$@"; then
-        touch "$report_dir/$name.ok"
-    else
-        touch "$report_dir/$name.failed"
-        echo "FAILED: $name"
-        return 1
-    fi
-}
-optional_component() {
-    local name="$1"; shift
-    rm -f "$report_dir/$name.ok" "$report_dir/$name.failed" "$report_dir/$name.blocked" "$report_dir/$name.external"
-    if "$@"; then
-        touch "$report_dir/$name.ok"
-    else
-        echo "Optional component unavailable on this Kali image: $name" > "$report_dir/$name.blocked"
-        return 0
-    fi
-}
-
 export DEBIAN_FRONTEND=noninteractive
+
+echo '[campus-ops] Installing Kali stable single-source monitor.'
 apt-get update
-apt-get install -y ca-certificates curl git gnupg python3 python3-venv python3-pip python3-dev build-essential
+apt-get install -y ca-certificates curl git python3 python3-venv python3-pip iproute2 libcap2-bin jq tshark
 
-echo 'wireshark-common wireshark-common/install-setuid boolean true' | debconf-set-selections
-apt-get install -y tshark wireshark tcpdump iproute2 iw ethtool libcap2-bin net-tools \
-    dnsutils iputils-ping traceroute jq openssl nmap arp-scan snmp lldpd yara logrotate \
-    suricata suricata-update
-
-# Zeek is in Kali's rolling repositories. Keep /opt/zeek/bin compatibility for the sensor runner.
-component zeek apt-get install -y zeek
-zeek_path="$(command -v zeek || true)"
-if [[ -z "$zeek_path" ]]; then
-    zeek_path="$(find /usr -type f -name zeek -perm -111 2>/dev/null | head -n1 || true)"
-fi
-if [[ -n "$zeek_path" ]]; then
-    install -d -m 0755 /opt/zeek/bin
-    ln -sfn "$zeek_path" /opt/zeek/bin/zeek
-else
-    echo 'Zeek package installed but executable was not found.' >&2
-    touch "$report_dir/zeek.failed"
-    exit 1
-fi
-component suricata true
-component suricata-rules suricata-update --no-reload
-
-if [[ "$profile" == full ]]; then
-    optional_component clamav apt-get install -y clamav
-    optional_component bpftrace apt-get install -y bpftrace
-    optional_component bcc apt-get install -y bpfcc-tools
-    optional_component nfdump apt-get install -y nfdump
-    optional_component pmacct apt-get install -y pmacct
-    optional_component softflowd apt-get install -y softflowd
-fi
-
-# Use the system Python when it is new enough; otherwise install a managed 3.12 runtime.
 app_python=/usr/bin/python3
 if ! "$app_python" -c 'import sys; assert sys.version_info >= (3, 12)' 2>/dev/null; then
     uv_installer="$(mktemp)"
@@ -106,106 +38,85 @@ if ! "$app_python" -c 'import sys; assert sys.version_info >= (3, 12)' 2>/dev/nu
     /opt/campus-ops/bin/uv python install 3.12
     app_python="$(/opt/campus-ops/bin/uv python find --managed-python 3.12)"
 fi
-rm -rf /opt/campus-ops/venv.new
-"$app_python" -m venv /opt/campus-ops/venv.new
-/opt/campus-ops/venv.new/bin/python -m pip install --upgrade pip
-/opt/campus-ops/venv.new/bin/python -m pip install --upgrade "$project_root"
-/opt/campus-ops/venv.new/bin/python -m pip check
-if [[ -d /opt/campus-ops/venv ]]; then
-    rm -rf /opt/campus-ops/venv.previous
-    mv /opt/campus-ops/venv /opt/campus-ops/venv.previous
-fi
-mv /opt/campus-ops/venv.new /opt/campus-ops/venv
+
+systemctl stop campus-ops.service >/dev/null 2>&1 || true
+rm -rf /opt/campus-ops/venv
+"$app_python" -m venv /opt/campus-ops/venv
 app=/opt/campus-ops/venv/bin/python
-"$app" -m pip freeze > "$report_dir/python-resolved.txt"
+"$app" -m pip install --upgrade pip setuptools wheel
+"$app" -m pip install --upgrade --no-cache-dir "$project_root"
+"$app" -m pip check
 
 getent group campus-ops >/dev/null || groupadd --system campus-ops
-for account in campus-ops campus-sensor; do
-    id "$account" >/dev/null 2>&1 || useradd --system --gid campus-ops --home-dir /var/lib/campus-ops --shell /usr/sbin/nologin "$account"
-done
+id campus-ops >/dev/null 2>&1 || useradd --system --gid campus-ops --home-dir /var/lib/campus-ops --shell /usr/sbin/nologin campus-ops
 getent group wireshark >/dev/null || groupadd --system wireshark
 usermod -a -G wireshark campus-ops
-if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]] && id "$SUDO_USER" >/dev/null 2>&1; then
-    usermod -a -G wireshark "$SUDO_USER"
-fi
 
-dumpcap_path="$(command -v dumpcap)"
+dumpcap_path="$(command -v dumpcap || true)"
+[[ -n "$dumpcap_path" ]] || { echo 'dumpcap helper missing from TShark installation.' >&2; exit 1; }
 chown root:wireshark "$dumpcap_path"
 chmod 0750 "$dumpcap_path"
 setcap cap_net_raw,cap_net_admin=eip "$dumpcap_path"
+capture_caps="$(getcap "$dumpcap_path" 2>/dev/null || true)"
+[[ "$capture_caps" == *cap_net_admin* && "$capture_caps" == *cap_net_raw* ]] || {
+    echo "dumpcap capability verification failed: ${capture_caps:-none}" >&2
+    exit 1
+}
+
+runuser -u campus-ops -- tshark -D >"$report_dir/tshark-interfaces.txt" 2>&1 || {
+    cat "$report_dir/tshark-interfaces.txt" >&2 || true
+    exit 1
+}
+[[ -s "$report_dir/tshark-interfaces.txt" ]] || { echo 'TShark returned no capture interfaces.' >&2; exit 1; }
+if [[ "$interface" != auto ]] && ! ip link show dev "$interface" >/dev/null 2>&1; then
+    echo "Requested interface does not exist: $interface" >&2
+    exit 64
+fi
 
 install -d -m 0750 -o campus-ops -g campus-ops /var/lib/campus-ops
-install -d -m 0750 -o root -g campus-ops /etc/campus-ops /etc/campus-ops/sensors
-install -d -m 0750 -o campus-sensor -g campus-ops /var/log/campus-ops /run/campus-ops-sensors
-for sensor in zeek suricata falco opencanary; do
-    install -d -m 0750 -o campus-sensor -g campus-ops "/var/log/campus-ops/$sensor"
+install -d -m 0750 -o root -g campus-ops /etc/campus-ops
+rm -f /etc/campus-ops/managed-feeds.env /etc/campus-ops/agents.env /etc/campus-ops/response.env /etc/campus-ops/tools.env /etc/campus-ops/voice.env
+rm -rf /etc/campus-ops/sensors /var/lib/campus-ops/zeek /var/lib/campus-ops/suricata /var/lib/campus-ops/opencanary /var/lib/campus-ops/falco
+
+cat > /etc/campus-ops/campus-ops.env <<EOF
+CAMPUS_OPS_DATA_DIR=/var/lib/campus-ops
+CAMPUS_OPS_NO_BROWSER=1
+EOF
+cat > /etc/campus-ops/sensors.env <<EOF
+CAMPUS_OPS_INTERFACE=$interface
+EOF
+chgrp campus-ops /etc/campus-ops/campus-ops.env /etc/campus-ops/sensors.env
+chmod 0640 /etc/campus-ops/campus-ops.env /etc/campus-ops/sensors.env
+
+for unit in campus-ops-sensor@zeek.service campus-ops-sensor@suricata.service campus-ops-sensor@opencanary.service campus-ops-falco.service; do
+    systemctl disable --now "$unit" >/dev/null 2>&1 || true
 done
+rm -f /etc/systemd/system/campus-ops-sensor@.service /etc/systemd/system/campus-ops-falco.service
+find /etc/systemd/system -maxdepth 2 -type l \( -name 'campus-ops-sensor@*.service' -o -name 'campus-ops-falco.service' \) -delete 2>/dev/null || true
 
-canary_args=()
-if [[ "$profile" == full ]]; then
-    "$app_python" -m venv /opt/campus-ops/opencanary
-    if /opt/campus-ops/opencanary/bin/python -m pip install --upgrade opencanary; then
-        touch "$report_dir/opencanary.ok"
-        /opt/campus-ops/opencanary/bin/python - <<'PY' > "$report_dir/opencanary-defaults.json"
-from importlib.resources import files
-print(files('opencanary').joinpath('data/settings.json').read_text())
-PY
-        canary_args=(--canary-defaults "$report_dir/opencanary-defaults.json")
-    else
-        echo 'OpenCanary pip installation unavailable' > "$report_dir/opencanary.blocked"
-    fi
-    # Falco support is kernel/repository dependent on Kali; do not misreport it as operational.
-    if command -v falco >/dev/null 2>&1 && [[ -r /sys/kernel/btf/vmlinux ]]; then
-        touch "$report_dir/falco.external"
-    else
-        echo 'Falco not enabled: requires a compatible installed Falco plus kernel BTF.' > "$report_dir/falco.blocked"
-    fi
-fi
-
-"$app" "$project_root/scripts/configure_ubuntu.py" --interface "$interface" --replace-interface "${canary_args[@]}"
-if [[ ! -f /etc/campus-ops/risk-policy.json ]]; then
-    install -m 0640 "$project_root/config/risk-policy.json" /etc/campus-ops/risk-policy.json
-fi
-chgrp -R campus-ops /etc/campus-ops
-chmod 0640 /etc/campus-ops/*.env /etc/campus-ops/sensors/*
-for unit in campus-ops.service campus-ops-sensor@.service campus-ops-falco.service; do
-    install -m 0644 "$project_root/deploy/$unit" "/etc/systemd/system/$unit"
-done
-install -m 0644 "$project_root/deploy/campus-ops-tmpfiles.conf" /etc/tmpfiles.d/campus-ops.conf
-install -m 0644 "$project_root/deploy/campus-ops-logrotate" /etc/logrotate.d/campus-ops
-systemd-tmpfiles --create /etc/tmpfiles.d/campus-ops.conf
-systemctl daemon-reload
-
-for sensor in zeek suricata opencanary; do
-    if [[ -f "$report_dir/$sensor.ok" ]]; then
-        systemctl enable "campus-ops-sensor@$sensor.service"
-        systemctl restart "campus-ops-sensor@$sensor.service"
-    fi
-done
-
-"$app" - "$report_dir" "$profile" <<'PY'
-import json, sys, time
+install -m 0644 "$project_root/deploy/campus-ops.service" /etc/systemd/system/campus-ops.service
+"$app" - <<'PY'
+import json
+import time
 from pathlib import Path
-directory = Path(sys.argv[1])
-states = {'ok': 'INSTALLED', 'failed': 'FAILED', 'blocked': 'BLOCKED', 'external': 'EXTERNAL_SERVICE'}
-components = {p.stem: {'state': states[p.suffix[1:]], 'detail': p.read_text()[:500]}
-              for p in directory.iterdir() if p.suffix[1:] in states}
-manifest = {'profile': 'kali-' + sys.argv[2], 'completed_at': time.time(), 'components': components}
-Path('/etc/campus-ops/deployment.json').write_text(json.dumps(manifest, indent=2) + '\n')
+Path('/etc/campus-ops/deployment.json').write_text(json.dumps({
+    'profile': 'stable-single-source',
+    'version': '0.5.0',
+    'completed_at': time.time(),
+    'components': {
+        'tshark': {'state': 'INSTALLED', 'detail': 'single authoritative live packet source'},
+        'legacy-sensors': {'state': 'REMOVED', 'detail': 'parallel sensor services/configuration purged'},
+        'agent-control': {'state': 'REMOVED', 'detail': 'not part of stable passive runtime'},
+    },
+}, indent=2) + '\n')
 PY
 
+systemctl daemon-reload
 systemctl enable campus-ops.service
-systemctl stop campus-ops.service 2>/dev/null || true
-"$app" "$project_root/scripts/configure_ubuntu.py" --stop-previous-console
 systemctl restart campus-ops.service
+bash "$project_root/scripts/wait_for_console.sh" --url http://127.0.0.1:8765/api/v1/live/status --timeout 60
+sleep 3
+"$app" -m campus_ops.deployment_check
 
-if ! bash "$project_root/scripts/wait_for_console.sh" --url http://127.0.0.1:8765/api/v1/system/deployment --timeout 60; then
-    echo 'Campus Ops console did not become ready; service diagnostics were printed above.' >&2
-    exit 2
-fi
-sleep 4
-"$app" -m campus_ops.deployment_check || true
-
-echo 'Kali deployment complete.'
-echo 'Console: http://127.0.0.1:8765'
-echo 'If you run TShark manually, start a new login session so your wireshark group membership is refreshed.'
+echo '[campus-ops] Kali stable setup complete.'
+echo '[campus-ops] Console: http://127.0.0.1:8765'
