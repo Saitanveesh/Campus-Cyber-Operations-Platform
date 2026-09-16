@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+from datetime import UTC, datetime
+
+from campus_ops.models import Event, EventKind
 from campus_ops.orchestrator import Orchestrator
 from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
 
@@ -62,6 +66,38 @@ class StableOrchestrator(Orchestrator):
             self.incidents,
         ]
 
+    @staticmethod
+    def _session_control_event(event: Event) -> bool:
+        """Keep high-rate packet observations out of the session-manager queue."""
+        return event.source == "network-discovery" and event.kind == EventKind.NETWORK
+
+    async def start(self) -> None:
+        """Start stable workers with a dedicated network-only session control plane."""
+        if self.started_at is not None:
+            return
+        self.started_at = datetime.now(UTC)
+        self._session_sub = await self.bus.subscribe(
+            "session-manager",
+            predicate=self._session_control_event,
+        )
+        self._session_task = asyncio.create_task(
+            self._session_loop(self._session_sub),
+            name="session-manager",
+        )
+        for worker in self.workers:
+            await worker.start()
+        await self.bus.publish(
+            Event(
+                source="orchestrator",
+                kind=EventKind.ACTION,
+                payload={
+                    "state": "STARTED",
+                    "message": "Live Operations Console started",
+                    "voice": "Welcome back.",
+                },
+            )
+        )
+
     def snapshot(self) -> dict[str, object]:
         result = super().snapshot()
         result["version"] = "0.4.2"
@@ -71,4 +107,5 @@ class StableOrchestrator(Orchestrator):
         result["network_identity_confirmations"] = 3
         result["capture_state_policy"] = "process-health-only"
         result["topology_source"] = "same-tshark-packet-stream"
+        result["session_control_plane"] = "network-events-only"
         return result
