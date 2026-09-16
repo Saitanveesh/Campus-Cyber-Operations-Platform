@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root 'dist\CampusCyberOperationsPlatform.exe'
+$exe = Join-Path $root 'dist\CampusOperationalConsole.exe'
 
 if ($Remove) {
     if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
@@ -38,8 +38,19 @@ $bin = '"' + $exe + '"'
 sc.exe create $ServiceName binPath= $bin start= auto DisplayName= $DisplayName | Out-Null
 sc.exe description $ServiceName 'Campus cyber operations monitoring service' | Out-Null
 sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/15000/restart/30000 | Out-Null
+
+# Service processes have no interactive browser session. Keep network selection automatic
+# unless an operator explicitly overrides it later in the service environment.
+$serviceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+New-ItemProperty `
+    -Path $serviceKey `
+    -Name Environment `
+    -PropertyType MultiString `
+    -Value @('CAMPUS_OPS_NO_BROWSER=1', 'CAMPUS_OPS_INTERFACE=auto') `
+    -Force | Out-Null
+
 Start-Service -Name $ServiceName
 
 Write-Host "Installed and started $ServiceName"
 Write-Host "Executable: $exe"
-Write-Host 'Note: service-mode browser launch should be disabled with CAMPUS_OPS_NO_BROWSER=1 in the service environment.'
+Write-Host 'Service environment: CAMPUS_OPS_NO_BROWSER=1, CAMPUS_OPS_INTERFACE=auto'
