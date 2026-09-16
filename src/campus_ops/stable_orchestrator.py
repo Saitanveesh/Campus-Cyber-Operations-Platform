@@ -23,7 +23,6 @@ from campus_ops.workers.dns_intelligence import DnsIntelligenceWorker
 from campus_ops.workers.dos_warning import DosEarlyWarningWorker
 from campus_ops.workers.flow_engine import FlowEngineWorker
 from campus_ops.workers.incidents import IncidentCorrelationWorker
-from campus_ops.workers.network_discovery import NetworkDiscoveryWorker
 from campus_ops.workers.performance_engine import PerformanceEngineWorker
 from campus_ops.workers.protocol_engine import ProtocolEngineWorker
 from campus_ops.workers.service_intelligence import ServiceIntelligenceWorker
@@ -33,14 +32,15 @@ from campus_ops.workers.tcp_intelligence import TcpIntelligenceWorker
 from campus_ops.workers.telemetry import TelemetryWorker
 from campus_ops.workers.topology_engine import TopologyEngineWorker
 from campus_ops.workers.traffic_baseline import TrafficBaselineWorker
+from campus_ops.workers.windows_network import WindowsNetworkDiscoveryWorker
 
 
 class StableOrchestrator:
-    """Lean single-source runtime for MON stable mode.
+    """Native Windows single-source MON runtime.
 
-    This class is intentionally standalone. It does not construct the legacy agent,
-    response, multi-sensor, voice, forensic-capture, tool-probe or enterprise stacks.
-    Every live network view is derived from one TShark packet stream.
+    Windows adapter discovery elects one real host adapter. One managed TShark/Npcap
+    process is the only packet source. All assets, flows, topology, investigation and
+    security state are derived from that current-session packet stream.
     """
 
     def __init__(self, settings: Settings = DEFAULT_SETTINGS) -> None:
@@ -50,7 +50,7 @@ class StableOrchestrator:
         self.started_at: datetime | None = None
         self.session_id: str | None = None
 
-        self.network = NetworkDiscoveryWorker(
+        self.network = WindowsNetworkDiscoveryWorker(
             self.bus,
             interval=settings.network_poll_seconds,
             switch_margin=settings.interface_switch_margin,
@@ -72,11 +72,7 @@ class StableOrchestrator:
             self.get_interface,
             interval=1.0,
         )
-        self.stale_cleanup = StaleCleanupWorker(
-            self.bus,
-            self.state,
-            self.get_session_id,
-        )
+        self.stale_cleanup = StaleCleanupWorker(self.bus, self.state, self.get_session_id)
         self.protocol_engine = ProtocolEngineWorker(self.bus, self.state, self.get_session_id)
         self.asset_engine = AssetEngineWorker(
             self.bus,
@@ -151,7 +147,6 @@ class StableOrchestrator:
         stable = {
             "interface": current.get("interface"),
             "ipv4": current.get("ipv4"),
-            "ipv6": current.get("ipv6"),
             "prefixes": current.get("prefixes"),
             "gateway": current.get("gateway"),
             "default_route": current.get("default_route"),
@@ -207,11 +202,7 @@ class StableOrchestrator:
             if change == "NETWORK_UNAVAILABLE":
                 await self._close_session(change)
                 continue
-            if change not in {
-                "INTERFACE_SELECTED",
-                "INTERFACE_CHANGED",
-                "NETWORK_IDENTITY_CHANGED",
-            }:
+            if change not in {"INTERFACE_SELECTED", "INTERFACE_CHANGED", "NETWORK_IDENTITY_CHANGED"}:
                 continue
             current = event.payload.get("current")
             if isinstance(current, dict):
@@ -235,7 +226,7 @@ class StableOrchestrator:
             Event(
                 source="orchestrator",
                 kind=EventKind.ACTION,
-                payload={"state": "STARTED", "message": "MON stable runtime started"},
+                payload={"state": "STARTED", "message": "MON Windows runtime started"},
             )
         )
 
@@ -268,7 +259,6 @@ class StableOrchestrator:
 
     @classmethod
     def _derive_risk_graph(cls, live: dict[str, object]) -> dict[str, object]:
-        """Build a small risk overlay from current alert/incident evidence only."""
         severity_score = {"CRITICAL": 95, "HIGH": 75, "MEDIUM": 50, "LOW": 25, "INFO": 5}
         nodes: dict[str, dict[str, object]] = {}
 
@@ -287,10 +277,7 @@ class StableOrchestrator:
             if not isinstance(incident, dict):
                 continue
             severity = str(incident.get("severity") or "INFO").upper()
-            score = max(
-                severity_score.get(severity, 5),
-                int(incident.get("confidence") or 0),
-            )
+            score = max(severity_score.get(severity, 5), int(incident.get("confidence") or 0))
             add(incident.get("source"), score, str(incident.get("title") or "incident evidence"))
 
         for alert in live.get("alerts", []):
@@ -310,9 +297,7 @@ class StableOrchestrator:
                 "state": worker.health.state.value,
                 "detail": worker.health.detail,
                 "last_heartbeat": (
-                    worker.health.last_heartbeat.isoformat()
-                    if worker.health.last_heartbeat
-                    else None
+                    worker.health.last_heartbeat.isoformat() if worker.health.last_heartbeat else None
                 ),
                 "last_error": worker.health.last_error,
             }
@@ -330,13 +315,15 @@ class StableOrchestrator:
         live["metrics"] = metrics
 
         return {
-            "product": "Campus Cyber Operations Platform",
+            "product": "MON Windows",
             "platform": platform.system(),
-            "version": "0.5.0",
-            "runtime_profile": "stable-single-source",
+            "version": "1.0.0-windows",
+            "runtime_profile": "windows-native-single-source",
             "authoritative_packet_source": "tshark",
+            "capture_driver": "npcap",
             "capture_state_policy": "process-health-only",
             "session_control_plane": "network-events-only",
+            "ip_truth_policy": "current-session-packet-evidence-only",
             "topology_source": "same-tshark-packet-stream",
             "link_loss_confirmations": 5,
             "network_identity_confirmations": 3,
