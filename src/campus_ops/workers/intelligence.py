@@ -3,11 +3,13 @@ from __future__ import annotations
 import ipaddress
 from typing import Any
 
+Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 
-def _networks(context: dict[str, Any] | None) -> list[ipaddress._BaseNetwork]:
+
+def _networks(context: dict[str, Any] | None) -> list[Network]:
     if not isinstance(context, dict):
         return []
-    result: list[ipaddress._BaseNetwork] = []
+    result: list[Network] = []
     for raw in context.get("prefixes", ()) or ():
         try:
             result.append(ipaddress.ip_network(str(raw), strict=False))
@@ -61,4 +63,6 @@ def endpoint_role(value: object, context: dict[str, Any] | None) -> str:
 
     if ip.is_link_local:
         return "SPECIAL_ADDRESS"
-    return "EXTERNAL_PEER"
+    if ip.is_private:
+        return "OFF_SUBNET_PRIVATE"
+    return "PUBLIC_PEER"
