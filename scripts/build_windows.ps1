@@ -53,6 +53,11 @@ Write-Host '[MON] Building MONWindows.exe...'
   --collect-submodules campus_ops `
   --collect-all uvicorn `
   --collect-all fastapi `
+  --hidden-import servicemanager `
+  --hidden-import win32service `
+  --hidden-import win32serviceutil `
+  --hidden-import win32event `
+  --hidden-import win32timezone `
   src/campus_ops/__main__.py
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed.' }
 
