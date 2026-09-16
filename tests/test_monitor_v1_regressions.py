@@ -49,6 +49,8 @@ def test_stable_orchestrator_keeps_one_packet_source_but_restores_topology_deriv
     assert 'result["authoritative_packet_source"] = "tshark"' in stable
     assert 'result["topology_source"] = "same-tshark-packet-stream"' in stable
     assert 'result["capture_state_policy"] = "process-health-only"' in stable
+    assert 'result["session_control_plane"] = "network-events-only"' in stable
+    assert "predicate=self._session_control_event" in stable
     for forbidden in (
         "self.capture_health,",
         "self.suricata,",
@@ -95,12 +97,19 @@ def test_flows_are_packet_observed_and_tied_to_local_scope():
     assert "FLOW_TELEMETRY" not in source
 
 
-def test_current_ui_is_preserved_while_backend_core_is_added():
+def test_current_ui_promotes_protected_passive_views_without_admin_panel():
     source = Path("src/campus_ops/stable_ui.py").read_text()
     assert "TOPOLOGY_EXTENSION" in source
     assert "PATHSPACE_EXTENSION" in source
     assert "Stable 0.4.2" in source
     assert "Capture Interface" in source
+    assert "#adminButton{display:none!important}" in source
+    assert "Investigation" in source
+    assert "Forensics" in source
+    assert "button.tab[data-view=\"admin-hunt\"]" in source
+    assert "button.tab[data-view=\"admin-forensics\"]" in source
+    assert "button.tab[data-view=\"admin-remote\"]" in source
+    assert "button.tab[data-view=\"admin-contain\"]" in source
 
     operational = Path("src/campus_ops/operational_core.py").read_text()
     assert "FastAPI" in operational
