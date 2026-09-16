@@ -3,17 +3,16 @@ from campus_ops.models import NetworkCandidate
 from campus_ops.workers.network_discovery import elect_network
 
 
-def test_enterprise_routes_installed(tmp_path, monkeypatch):
+def test_stable_runtime_excludes_enterprise_layer_routes(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     app = build_app()
     paths = {getattr(route, "path", "") for route in app.routes}
-    assert "/api/v1/system/interface-decision" in paths
-    assert "/api/v1/system/enterprise-tools" in paths
-    assert "/api/v1/system/enterprise-fusion" in paths
-    assert "/api/v1/system/zeek" in paths
-    assert "/api/v1/admin/enterprise" in paths
-    assert "/api/v1/admin/enterprise/{target}" in paths
-    assert app.state.enterprise_layer_installed is True
+    assert "/api/v1/system/interface-decision" not in paths
+    assert "/api/v1/system/enterprise-tools" not in paths
+    assert "/api/v1/system/enterprise-fusion" not in paths
+    assert "/api/v1/system/zeek" not in paths
+    assert "/api/v1/system/diagnostics" in paths
+    assert getattr(app.state, "enterprise_layer_installed", False) is False
 
 
 def test_interface_election_prefers_routed_physical_adapter():
