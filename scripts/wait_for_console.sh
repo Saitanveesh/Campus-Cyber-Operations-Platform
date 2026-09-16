@@ -36,7 +36,7 @@ while (( SECONDS - start < timeout_seconds )); do
         exit 1
     fi
 
-    if [[ "$last_state" == "active" ]] && curl --silent --fail --max-time 2 "$url" >/dev/null 2>&1; then
+    if [[ "$last_state" == "active" ]]; then
         payload="$(curl --silent --fail --max-time 2 "$url" 2>/dev/null || true)"
         if [[ -n "$payload" ]]; then
             readiness="$(python3 -c '
@@ -49,21 +49,53 @@ except Exception as exc:
 
 session = d.get("session_id")
 network = d.get("network") if isinstance(d.get("network"), dict) else {}
+workers = d.get("workers") if isinstance(d.get("workers"), dict) else {}
 live = d.get("live") if isinstance(d.get("live"), dict) else {}
 capture = live.get("capture") if isinstance(live.get("capture"), dict) else {}
-interface = network.get("interface") or capture.get("interface")
+network_interface = network.get("interface")
+capture_interface = capture.get("interface")
 state = str(capture.get("state") or "UNKNOWN").upper()
 backend = str(capture.get("backend") or "")
 pid = capture.get("process_pid")
+network_worker = workers.get("network-discovery")
+capture_worker = workers.get("capture")
+network_worker_state = (
+    str(network_worker.get("state") or "UNKNOWN").upper()
+    if isinstance(network_worker, dict) else "MISSING"
+)
+capture_worker_state = (
+    str(capture_worker.get("state") or "UNKNOWN").upper()
+    if isinstance(capture_worker, dict) else "MISSING"
+)
+try:
+    pid_ok = int(pid or 0) > 0
+except (TypeError, ValueError):
+    pid_ok = False
+interfaces_match = bool(
+    network_interface and capture_interface and network_interface == capture_interface
+)
 
-if session and interface and state == "ACTIVE" and backend == "tshark" and pid:
-    print(f"READY session={str(session)[:8]} interface={interface} capture={state} pid={pid}")
+if (
+    session
+    and interfaces_match
+    and state == "ACTIVE"
+    and backend == "tshark"
+    and pid_ok
+    and network_worker_state == "HEALTHY"
+    and capture_worker_state == "HEALTHY"
+):
+    print(
+        f"READY session={str(session)[:8]} interface={network_interface} "
+        f"capture={state} pid={pid}"
+    )
     raise SystemExit(0)
 
 print(
     "NOT_READY "
-    f"session={bool(session)} interface={interface or 'none'} "
-    f"capture={state} backend={backend or 'none'} pid={pid or 'none'}"
+    f"session={bool(session)} network={network_interface or 'none'} "
+    f"capture_if={capture_interface or 'none'} capture={state} "
+    f"backend={backend or 'none'} pid={pid or 'none'} "
+    f"network_worker={network_worker_state} capture_worker={capture_worker_state}"
 )
 raise SystemExit(2)
 ' <<<"$payload" 2>&1)" && {
