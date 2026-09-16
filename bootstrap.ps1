@@ -114,6 +114,8 @@ function Write-DeploymentManifest {
         capture_engine = 'tshark'
         capture_driver = 'npcap'
         ip_truth_policy = 'current-session-packet-evidence-only'
+        executable = (Join-Path $env:ProgramFiles 'MON\MONWindows.exe')
+        data_directory = (Join-Path $env:ProgramData 'MON')
     }
     $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 (Join-Path $dir 'deployment.json')
 }
@@ -153,7 +155,16 @@ if ($LASTEXITCODE -ne 0) {
     exit 2
 }
 
+Write-Host '[MON] Running short stability and anti-fabrication smoke test...'
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\self_test_windows.ps1 -Samples 3 -IntervalSeconds 2
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning 'MON passed initial readiness but failed the smoke/soak test. Run .\scripts\diagnose_windows.ps1 before using the console.'
+    exit 2
+}
+
 Write-Host ''
 Write-Host 'MON Windows is READY.'
+Write-Host 'Installed executable: C:\Program Files\MON\MONWindows.exe'
+Write-Host 'Data directory: C:\ProgramData\MON'
 Write-Host 'Console: http://127.0.0.1:8765'
 Start-Process 'http://127.0.0.1:8765'
