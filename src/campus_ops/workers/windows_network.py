@@ -24,27 +24,36 @@ VIRTUAL_HINTS = (
     "vpn",
     "docker",
     "wsl",
+    "vethernet",
 )
 
 
-def classify_interface(name: str) -> str:
-    lowered = name.casefold()
-    if "loopback" in lowered:
+def classify_interface(name: str, description: str = "", *, virtual: bool = False) -> str:
+    text = f"{name} {description}".casefold()
+    if "loopback" in text:
         return "loopback"
-    if any(token in lowered for token in VIRTUAL_HINTS):
+    if virtual or any(token in text for token in VIRTUAL_HINTS):
         return "virtual"
-    if "wi-fi" in lowered or "wifi" in lowered or "wireless" in lowered or "wlan" in lowered:
+    if "wi-fi" in text or "wifi" in text or "wireless" in text or "wlan" in text or "802.11" in text:
         return "wireless"
-    if "ethernet" in lowered:
+    if "ethernet" in text or "gigabit" in text or "gbe" in text or "lan" in text:
         return "ethernet"
     return "other"
 
 
-def _powershell_json(script: str, timeout: float = 6.0) -> object:
+def _powershell_json(script: str, timeout: float = 7.0) -> object:
     if os.name != "nt":
         raise RuntimeError("MON Windows requires native Windows")
     proc = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -58,11 +67,35 @@ def _powershell_json(script: str, timeout: float = 6.0) -> object:
     return json.loads(text)
 
 
-def _route_table() -> dict[str, tuple[bool, int | None, str | None]]:
+def _adapter_metadata() -> dict[str, dict[str, object]]:
     raw = _powershell_json(
-        "Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' "
-        "-ErrorAction SilentlyContinue | Select-Object InterfaceAlias,RouteMetric,NextHop | "
+        "Get-NetAdapter -ErrorAction SilentlyContinue | "
+        "Select-Object Name,InterfaceDescription,Status,HardwareInterface,Virtual,ifIndex,MacAddress,LinkSpeed | "
         "ConvertTo-Json -Compress"
+    )
+    rows = raw if isinstance(raw, list) else [raw]
+    result: dict[str, dict[str, object]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("Name") or "").strip()
+        if name:
+            result[name.casefold()] = row
+    return result
+
+
+def _route_table() -> dict[str, tuple[bool, int | None, str | None]]:
+    # Windows route preference is RouteMetric + InterfaceMetric. Using only
+    # RouteMetric can select the wrong NIC on laptops with simultaneous VPN, Wi-Fi,
+    # Ethernet or Hyper-V routes.
+    raw = _powershell_json(
+        "$rows = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' "
+        "-ErrorAction SilentlyContinue | ForEach-Object { "
+        "$r=$_; $i=Get-NetIPInterface -InterfaceIndex $r.InterfaceIndex -AddressFamily IPv4 "
+        "-ErrorAction SilentlyContinue | Select-Object -First 1; "
+        "$im=if($i){[int]$i.InterfaceMetric}else{0}; "
+        "[pscustomobject]@{InterfaceAlias=$r.InterfaceAlias;EffectiveMetric=([int]$r.RouteMetric+$im);NextHop=$r.NextHop} }; "
+        "$rows | ConvertTo-Json -Compress"
     )
     rows = raw if isinstance(raw, list) else [raw]
     routes: dict[str, tuple[bool, int | None, str | None]] = {}
@@ -72,7 +105,7 @@ def _route_table() -> dict[str, tuple[bool, int | None, str | None]]:
         name = str(row.get("InterfaceAlias") or "").strip()
         if not name:
             continue
-        metric_raw = row.get("RouteMetric")
+        metric_raw = row.get("EffectiveMetric")
         try:
             metric = int(metric_raw) if metric_raw is not None else None
         except (TypeError, ValueError):
@@ -107,6 +140,7 @@ def discover_candidates() -> list[NetworkCandidate]:
     if os.name != "nt":
         raise RuntimeError("MON Windows network discovery can run only on native Windows")
     routes = _route_table()
+    metadata = _adapter_metadata()
     addresses = psutil.net_if_addrs()
     stats = psutil.net_if_stats()
     counters = psutil.net_io_counters(pernic=True)
@@ -115,7 +149,10 @@ def discover_candidates() -> list[NetworkCandidate]:
         ipv4: list[str] = []
         ipv6: list[str] = []
         prefixes: list[str] = []
-        is_loopback = "loopback" in name.casefold()
+        meta = metadata.get(name.casefold(), {})
+        description = str(meta.get("InterfaceDescription") or "")
+        is_virtual = bool(meta.get("Virtual")) or meta.get("HardwareInterface") is False
+        is_loopback = "loopback" in f"{name} {description}".casefold()
         for addr in addr_list:
             family_name = getattr(addr.family, "name", "")
             value = str(addr.address or "")
@@ -152,7 +189,7 @@ def discover_candidates() -> list[NetworkCandidate]:
                 gateway=gateway,
                 bytes_recv=io.bytes_recv if io else 0,
                 bytes_sent=io.bytes_sent if io else 0,
-                category=classify_interface(name),
+                category=classify_interface(name, description, virtual=is_virtual),
             )
         )
     return candidates
@@ -179,6 +216,7 @@ def score_candidate(candidate: NetworkCandidate) -> tuple[int, tuple[str, ...]]:
         reasons.append("default-route")
     else:
         score -= 20
+        reasons.append("no-default-route")
     if candidate.gateway:
         score += 8
         reasons.append("gateway")
@@ -189,21 +227,30 @@ def score_candidate(candidate: NetworkCandidate) -> tuple[int, tuple[str, ...]]:
         score += 12
         reasons.append("physical-wireless")
     elif candidate.category == "virtual":
-        score -= 80
+        score -= 100
         reasons.append("virtual-penalty")
     if candidate.route_metric is not None:
-        score += max(0, 30 - min(candidate.route_metric, 30))
-        reasons.append(f"metric:{candidate.route_metric}")
+        score += max(0, 40 - min(candidate.route_metric, 40))
+        reasons.append(f"effective-metric:{candidate.route_metric}")
     if candidate.bytes_recv or candidate.bytes_sent:
         score += 5
         reasons.append("traffic-seen")
     return score, tuple(reasons)
 
 
-def elect_network(candidates: list[NetworkCandidate], requested: str | None = None) -> SelectedNetwork | None:
+def elect_network(
+    candidates: list[NetworkCandidate], requested: str | None = None
+) -> SelectedNetwork | None:
     requested = requested if requested is not None else os.environ.get("CAMPUS_OPS_INTERFACE", "auto")
     if requested and requested.casefold() != "auto":
-        forced = next((item for item in candidates if item.name.casefold() == requested.casefold() and item.is_up), None)
+        forced = next(
+            (
+                item
+                for item in candidates
+                if item.name.casefold() == requested.casefold() and item.is_up
+            ),
+            None,
+        )
         if forced is None:
             return None
         return SelectedNetwork(
@@ -223,7 +270,11 @@ def elect_network(candidates: list[NetworkCandidate], requested: str | None = No
         return None
     routed = [(result, item) for result, item in viable if item.default_route]
     pool = routed or viable
-    physical = [(result, item) for result, item in pool if item.category in {"ethernet", "wireless", "other"}]
+    physical = [
+        (result, item)
+        for result, item in pool
+        if item.category in {"ethernet", "wireless", "other"}
+    ]
     if physical:
         pool = physical
     (score, reasons), selected = max(
@@ -248,10 +299,13 @@ def elect_network(candidates: list[NetworkCandidate], requested: str | None = No
 
 
 def _material_identity(network: SelectedNetwork) -> tuple[object, ...]:
+    # Windows temporary IPv6 addresses are intentionally excluded from identity. A
+    # DHCP IPv4/gateway/prefix change remains material and must be confirmed.
+    ipv4_prefixes = tuple(sorted(p for p in network.prefixes if "." in p))
     return (
         network.interface.casefold(),
         tuple(sorted(network.ipv4)),
-        tuple(sorted(network.prefixes)),
+        ipv4_prefixes,
         network.default_route,
         network.gateway,
     )
@@ -281,6 +335,7 @@ class WindowsNetworkDiscoveryWorker(BaseWorker):
         self._pending_identity: tuple[object, ...] | None = None
         self._pending_identity_network: SelectedNetwork | None = None
         self._pending_identity_count = 0
+        self._discovery_errors = 0
 
     async def _sleep(self) -> None:
         try:
@@ -288,24 +343,49 @@ class WindowsNetworkDiscoveryWorker(BaseWorker):
         except TimeoutError:
             pass
 
+    def _reset_identity_pending(self) -> None:
+        self._pending_identity = None
+        self._pending_identity_network = None
+        self._pending_identity_count = 0
+
     async def run(self) -> None:
         while not self.stopping:
             try:
                 self.candidates = await asyncio.to_thread(discover_candidates)
                 proposed = elect_network(self.candidates)
+                self._discovery_errors = 0
                 await self._consider(proposed)
                 if self.selected:
                     self.health.state = WorkerState.HEALTHY
-                    self.health.heartbeat(f"selected {self.selected.interface}")
+                    if self._loss_count:
+                        self.health.heartbeat(
+                            f"holding {self.selected.interface} through transient observation "
+                            f"{self._loss_count}/{self.unavailable_confirmations}"
+                        )
+                    elif self._pending_identity_count:
+                        self.health.heartbeat(
+                            f"confirming identity {self._pending_identity_count}/{self.identity_confirmations}"
+                        )
+                    else:
+                        self.health.heartbeat(f"selected {self.selected.interface}")
                 else:
                     self.health.state = WorkerState.DEGRADED
                     self.health.heartbeat("no eligible native Windows network adapter")
             except (OSError, ValueError, RuntimeError, psutil.Error, subprocess.SubprocessError) as exc:
+                self._discovery_errors += 1
                 self.health.state = WorkerState.DEGRADED
-                self.health.heartbeat(f"Windows network discovery retry: {exc}")
+                held = self.selected.interface if self.selected else "none"
+                self.health.heartbeat(
+                    f"Windows network discovery retry {self._discovery_errors}; holding {held}: {exc}"
+                )
             await self._sleep()
 
-    async def _publish(self, change: str, previous: SelectedNetwork | None, current: SelectedNetwork | None) -> None:
+    async def _publish(
+        self,
+        change: str,
+        previous: SelectedNetwork | None,
+        current: SelectedNetwork | None,
+    ) -> None:
         payload: dict[str, object] = {"change": change}
         if previous is not None:
             payload["previous"] = asdict(previous)
@@ -317,9 +397,7 @@ class WindowsNetworkDiscoveryWorker(BaseWorker):
         if proposed is None:
             self._pending_name = None
             self._pending_count = 0
-            self._pending_identity = None
-            self._pending_identity_network = None
-            self._pending_identity_count = 0
+            self._reset_identity_pending()
             if self.selected is None:
                 self._loss_count = 0
                 return
@@ -368,9 +446,7 @@ class WindowsNetworkDiscoveryWorker(BaseWorker):
         self._pending_count = 0
         if _material_identity(proposed) == _material_identity(self.selected):
             self.selected = proposed
-            self._pending_identity = None
-            self._pending_identity_network = None
-            self._pending_identity_count = 0
+            self._reset_identity_pending()
             return
 
         identity = _material_identity(proposed)
@@ -385,7 +461,5 @@ class WindowsNetworkDiscoveryWorker(BaseWorker):
             previous = self.selected
             current = self._pending_identity_network or proposed
             self.selected = current
-            self._pending_identity = None
-            self._pending_identity_network = None
-            self._pending_identity_count = 0
+            self._reset_identity_pending()
             await self._publish("NETWORK_IDENTITY_CHANGED", previous, current)
