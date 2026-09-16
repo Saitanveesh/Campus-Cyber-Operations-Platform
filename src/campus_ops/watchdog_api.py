@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import psutil
 from fastapi import FastAPI
 
 
@@ -45,14 +46,7 @@ def _anomaly_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {"count": len(rows), "items": rows[:100]}
 
 
-def _problem(
-    problem: str,
-    severity: str,
-    evidence: str,
-    cause: str,
-    fix: str,
-    verify: str,
-) -> dict[str, str]:
+def _problem(problem: str, severity: str, evidence: str, cause: str, fix: str, verify: str) -> dict[str, str]:
     return {
         "problem": problem,
         "severity": severity,
@@ -61,6 +55,20 @@ def _problem(
         "fix": fix,
         "verify": verify,
     }
+
+
+def _pid_is_tshark(pid: int) -> tuple[bool, str]:
+    if pid <= 0:
+        return False, "no PID"
+    try:
+        process = psutil.Process(pid)
+        name = process.name()
+        cmdline = " ".join(process.cmdline())
+    except (psutil.Error, OSError) as exc:
+        return False, str(exc)
+    if "tshark" not in name.casefold():
+        return False, f"PID {pid} belongs to {name}, not TShark"
+    return True, cmdline
 
 
 def _diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -72,6 +80,20 @@ def _diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
     network = snapshot.get("network") if isinstance(snapshot.get("network"), dict) else {}
     event_bus = snapshot.get("event_bus") if isinstance(snapshot.get("event_bus"), dict) else {}
 
+    native_windows = os.name == "nt"
+    checks.append({"check": "native_windows", "ok": native_windows, "value": os.name})
+    if not native_windows:
+        problems.append(
+            _problem(
+                "MON is not running on native Windows",
+                "HIGH",
+                f"os.name={os.name}",
+                "The Windows product build was started from WSL/Linux or another unsupported host.",
+                "Close this instance and run MON from Windows PowerShell using .\\bootstrap.ps1.",
+                "System diagnostics must report native_windows=OK.",
+            )
+        )
+
     session_id = snapshot.get("session_id")
     checks.append({"check": "monitoring_session", "ok": bool(session_id), "value": session_id})
     if not session_id:
@@ -80,38 +102,41 @@ def _diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
                 "No active monitoring session",
                 "HIGH",
                 "session_id is empty",
-                "Network discovery has not confirmed a usable routed interface, or the selected network was lost.",
-                "Check `ip -br addr` and `ip route`; then verify the intended interface is UP and has a route. MON will open a session automatically after confirmation.",
-                "`curl -s http://127.0.0.1:8765/api/v1/live/status` should show a non-empty session_id.",
+                "Windows adapter discovery has not confirmed an eligible routed adapter or the selected network was lost.",
+                "Run `Get-NetAdapter` and `Get-NetIPConfiguration` in PowerShell. Confirm the intended Wi-Fi/Ethernet adapter is Up and has an IPv4 address/default gateway.",
+                "Open http://127.0.0.1:8765/api/v1/live/status and confirm session_id is non-empty.",
             )
         )
 
     interface = str(network.get("interface") or "")
-    checks.append({"check": "selected_interface", "ok": bool(interface), "value": interface or None})
+    checks.append({"check": "selected_adapter", "ok": bool(interface), "value": interface or None})
     if not interface:
         problems.append(
             _problem(
-                "No selected capture interface",
+                "No Windows capture adapter selected",
                 "HIGH",
                 "network.interface is empty",
-                "No eligible active routed interface has passed MON's network-selection confirmation.",
-                "Run `ip -br addr` and `ip route`. Restore the intended network connection; do not force `any` or loopback.",
-                "The Network page and live status should show one concrete interface such as eth0/enp*/wlp*.",
+                "MON did not find a confirmed active physical Wi-Fi/Ethernet adapter with usable routing.",
+                "Run `Get-NetAdapter | Format-Table Name,Status,InterfaceDescription` and `Get-NetRoute -DestinationPrefix 0.0.0.0/0`. Restore the real adapter instead of forcing a virtual/loopback interface.",
+                "The Network page must show one concrete Windows adapter such as Wi-Fi or Ethernet.",
             )
         )
 
     capture_state = str(capture.get("state") or "UNKNOWN").upper()
     capture_interface = str(capture.get("interface") or "")
+    capture_device = str(capture.get("capture_device") or "")
     backend = str(capture.get("backend") or "")
     process_pid = int(capture.get("process_pid") or 0)
+    pid_ok, pid_detail = _pid_is_tshark(process_pid)
     checks.extend(
         [
             {"check": "capture_active", "ok": capture_state == "ACTIVE", "value": capture_state},
             {"check": "capture_backend", "ok": backend == "tshark", "value": backend or None},
-            {"check": "capture_pid", "ok": process_pid > 0, "value": process_pid or None},
+            {"check": "tshark_process", "ok": pid_ok, "value": process_pid or None},
+            {"check": "npcap_device", "ok": bool(capture_device), "value": capture_device or None},
             {
-                "check": "interface_alignment",
-                "ok": bool(interface and capture_interface and interface == capture_interface),
+                "check": "adapter_alignment",
+                "ok": bool(interface and capture_interface and interface.casefold() == capture_interface.casefold()),
                 "value": f"network={interface or '-'} capture={capture_interface or '-'}",
             },
         ]
@@ -124,9 +149,9 @@ def _diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
                 "Packet capture is not active",
                 "HIGH",
                 f"capture.state={capture_state}; detail={detail}",
-                "The managed TShark process is waiting, unavailable, failed to start, or exited.",
-                "Run `sudo /opt/campus-ops/venv/bin/python -m campus_ops.deployment_check` and `sudo journalctl -u campus-ops.service -n 100 --no-pager`. Repair the first reported TShark/interface/permission error.",
-                "Live status must show capture.state=ACTIVE and a positive process_pid.",
+                "TShark could not bind the elected Windows adapter, Npcap is unavailable, or the TShark child process exited.",
+                "In Administrator PowerShell run `& 'C:\\Program Files\\Wireshark\\tshark.exe' -D` and `Get-Service npcap -ErrorAction SilentlyContinue`. Then run `.\\scripts\\diagnose_windows.ps1` for the exact adapter/process failure.",
+                "MON must show capture.state=ACTIVE, backend=tshark, and a positive process_pid.",
             )
         )
     if backend != "tshark":
@@ -135,42 +160,31 @@ def _diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
                 "Unexpected capture backend",
                 "HIGH",
                 f"capture.backend={backend or 'missing'}",
-                "The stable runtime contract was violated or stale code is installed.",
-                "Pull monitor-v1 and run `bash bootstrap.sh` to recreate the managed environment from the current package.",
+                "The Windows single-source runtime contract was violated or stale files are running.",
+                "Pull the Windows branch and rerun `.\\bootstrap.ps1` from Administrator PowerShell.",
                 "Live status must report authoritative_packet_source=tshark and capture.backend=tshark.",
             )
         )
-    if process_pid <= 0:
+    if not pid_ok:
         problems.append(
             _problem(
-                "TShark process PID is missing",
+                "Managed TShark process is not verified",
                 "HIGH",
-                "capture.process_pid is empty or zero",
-                "MON has no verified managed capture process.",
-                "Restart only through the managed service: `sudo systemctl restart campus-ops.service`; if it remains missing, run the deployment check and inspect the service journal.",
-                "Live status must show a positive TShark process_pid.",
+                f"process_pid={process_pid or 'missing'}; {pid_detail}",
+                "MON has no live TShark process corresponding to its capture state.",
+                "Run `.\\scripts\\diagnose_windows.ps1`; restart the CampusCyberOperationsPlatform service only after fixing the first reported TShark/Npcap error.",
+                "Watchdog must show a live TShark PID and capture.state=ACTIVE.",
             )
         )
-    elif os.name == "posix" and not os.path.exists(f"/proc/{process_pid}"):
+    if interface and capture_interface and interface.casefold() != capture_interface.casefold():
         problems.append(
             _problem(
-                "Recorded TShark PID is not alive",
-                "HIGH",
-                f"/proc/{process_pid} does not exist",
-                "The capture subprocess exited after MON recorded its PID.",
-                "Inspect `sudo journalctl -u campus-ops.service -n 100 --no-pager`, then restart the managed service after correcting the reported capture error.",
-                "The watchdog should show a live PID and capture.state=ACTIVE after restart.",
-            )
-        )
-    if interface and capture_interface and interface != capture_interface:
-        problems.append(
-            _problem(
-                "Network and capture interfaces disagree",
+                "Selected adapter and capture adapter disagree",
                 "HIGH",
                 f"network.interface={interface}; capture.interface={capture_interface}",
-                "Network selection changed but the capture process did not bind to the same confirmed interface.",
-                "Restart `campus-ops.service`. If the mismatch returns, capture the output of `bash scripts/diagnose_runtime.sh` before changing interface settings.",
-                "The Network and Capture interface values must be identical.",
+                "Windows network selection changed but the managed capture was not rebound to the same confirmed adapter.",
+                "Restart `CampusCyberOperationsPlatform` from Services or run `Restart-Service CampusCyberOperationsPlatform` in Administrator PowerShell. If it returns, capture `.\\scripts\\diagnose_windows.ps1` output.",
+                "The Network and Capture interface names must match exactly ignoring case.",
             )
         )
 
@@ -183,14 +197,14 @@ def _diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
             continue
         detail = str(raw.get("detail") or raw.get("last_error") or state)
         if name == "network-discovery":
-            cause = "The network-discovery worker could not maintain a confirmed usable interface."
-            fix = "Check interface/route state with `ip -br addr` and `ip route`; then inspect the MON service journal for the exact discovery error."
+            cause = "Native Windows adapter/routing discovery could not maintain a confirmed interface."
+            fix = "Use `Get-NetAdapter` and `Get-NetIPConfiguration`, restore the real Wi-Fi/Ethernet adapter, then run `.\\scripts\\diagnose_windows.ps1`."
         elif name == "capture":
-            cause = "The managed TShark worker reported an acquisition/process failure."
-            fix = "Run the deployment check and inspect the service journal; correct the TShark/interface/permission error before restarting MON."
+            cause = "The managed TShark/Npcap capture worker reported a process or adapter binding failure."
+            fix = "Run `tshark.exe -D`, verify the Npcap service/driver, then run `.\\scripts\\diagnose_windows.ps1`."
         else:
-            cause = "A stable analysis worker reported an internal processing error or unhealthy dependency."
-            fix = "Inspect `sudo journalctl -u campus-ops.service -n 100 --no-pager` for this worker's exception. Do not reinstall capture tools unless the capture worker is the failing component."
+            cause = "A packet-analysis worker reported an internal processing error or unhealthy dependency."
+            fix = "Use the System diagnostics and Windows service status. Do not reinstall capture components unless the capture worker itself is failing."
         problems.append(
             _problem(
                 f"Worker {name} is {state}",
@@ -198,7 +212,7 @@ def _diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
                 detail,
                 cause,
                 fix,
-                f"The System page should show worker {name}=HEALTHY after correction.",
+                f"System must show worker {name}=HEALTHY after correction.",
             )
         )
 
@@ -208,16 +222,22 @@ def _diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
         dropped = int(raw.get("dropped") or 0)
         queued = int(raw.get("queued") or 0)
         capacity = max(1, int(raw.get("capacity") or 1))
-        checks.append({"check": f"event_bus:{name}", "ok": dropped == 0, "value": {"queued": queued, "dropped": dropped, "capacity": capacity}})
+        checks.append(
+            {
+                "check": f"event_bus:{name}",
+                "ok": dropped == 0,
+                "value": {"queued": queued, "dropped": dropped, "capacity": capacity},
+            }
+        )
         if dropped > 0:
             problems.append(
                 _problem(
                     f"Event bus dropped data for {name}",
                     "MEDIUM",
                     f"dropped={dropped}; queued={queued}; capacity={capacity}",
-                    "The consumer could not keep up with its subscribed event stream and the bounded queue discarded older events.",
-                    "Capture `bash scripts/diagnose_runtime.sh` and inspect which worker is lagging. The session-manager control plane is filtered separately and should not be affected by packet-volume drops.",
-                    "The dropped counter should remain stable at zero after restart/repair during the next traffic test.",
+                    "The analysis consumer could not keep up with its subscribed packet/event stream.",
+                    "Run `.\\scripts\\diagnose_windows.ps1` and inspect the named worker. The session-manager control plane is isolated from packet-volume drops.",
+                    "The dropped counter should remain stable at zero during the next controlled traffic test.",
                 )
             )
 
@@ -243,6 +263,7 @@ def build_watchdog_status(snapshot: dict[str, Any]) -> dict[str, Any]:
             "state": capture.get("state"),
             "backend": capture.get("backend"),
             "interface": capture.get("interface"),
+            "capture_device": capture.get("capture_device"),
             "process_pid": capture.get("process_pid"),
             "traffic_activity": capture.get("traffic_activity"),
             "packets": capture.get("packets"),
@@ -250,7 +271,7 @@ def build_watchdog_status(snapshot: dict[str, Any]) -> dict[str, Any]:
         },
         "diagnostics": diagnostics,
         "anomalies": {"count": anomalies["count"], "top": anomalies["items"][:10]},
-        "claim": "DETERMINISTIC_RUNTIME_DIAGNOSTICS",
+        "claim": "WINDOWS_DETERMINISTIC_RUNTIME_DIAGNOSTICS",
     }
 
 
