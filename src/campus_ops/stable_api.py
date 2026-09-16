@@ -2,20 +2,22 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 
-from campus_ops.stable_orchestrator import StableOrchestrator
 
-
-def create_stable_app(orchestrator: StableOrchestrator | None = None) -> FastAPI:
+def create_stable_app(orchestrator: Any | None = None) -> FastAPI:
     """Create the native Windows MON API.
 
-    No active probe, remote shell, isolation, secondary sensor feed, scanner or legacy
-    Admin/tool-hub routes are mounted. Browser voice is presentation-only and consumes
-    the same watchdog/security data; it is not a second analysis pipeline.
+    No endpoint-agent control, remote shell, active probe, quarantine, secondary sensor
+    feed, scanner or legacy tool-hub routes are mounted here.
     """
-    orch = orchestrator or StableOrchestrator()
+    if orchestrator is None:
+        from campus_ops.windows_orchestrator import WindowsOrchestrator
+
+        orchestrator = WindowsOrchestrator()
+    orch = orchestrator
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -27,8 +29,11 @@ def create_stable_app(orchestrator: StableOrchestrator | None = None) -> FastAPI
 
     app = FastAPI(
         title="MON Windows Network Monitor",
-        version="1.0.0",
+        version="1.0.0-windows",
         lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
     app.state.orchestrator = orch
 
@@ -55,7 +60,6 @@ def create_stable_app(orchestrator: StableOrchestrator | None = None) -> FastAPI
                 "incidents": len(live["incidents"]),
             },
             "visibility_mode": live["visibility_mode"],
-            "ip_truth_policy": snapshot.get("ip_truth_policy"),
         }
 
     @app.get("/api/v1/live/network")
@@ -67,6 +71,7 @@ def create_stable_app(orchestrator: StableOrchestrator | None = None) -> FastAPI
             "session_id": snapshot["session_id"],
             "network": snapshot["network"],
             "candidates": snapshot["network_candidates"],
+            "capture_adapter_evidence": snapshot.get("capture_adapter_evidence"),
             "worker": workers.get("network-discovery"),
         }
 
@@ -133,7 +138,6 @@ def create_stable_app(orchestrator: StableOrchestrator | None = None) -> FastAPI
             "workers": snapshot["workers"],
             "event_bus": snapshot["event_bus"],
             "runtime_profile": snapshot["runtime_profile"],
-            "ip_truth_policy": snapshot.get("ip_truth_policy"),
         }
 
     @app.websocket("/api/v1/live/ws")
