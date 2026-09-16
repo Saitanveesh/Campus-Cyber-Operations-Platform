@@ -71,6 +71,29 @@ chown root:wireshark "$dumpcap_path"
 chmod 0750 "$dumpcap_path"
 setcap cap_net_raw,cap_net_admin=eip "$dumpcap_path"
 
+capture_caps="$(getcap "$dumpcap_path" 2>/dev/null || true)"
+if [[ "$capture_caps" != *cap_net_admin* || "$capture_caps" != *cap_net_raw* ]]; then
+    echo "dumpcap capability verification failed: ${capture_caps:-none}" >&2
+    exit 1
+fi
+
+# Verify the exact unprivileged service account can enumerate capture interfaces before
+# enabling MON. This catches broken wireshark group membership/capability setups early.
+if ! runuser -u campus-ops -- tshark -D >"$report_dir/tshark-interfaces.txt" 2>&1; then
+    echo 'campus-ops cannot enumerate TShark capture interfaces.' >&2
+    cat "$report_dir/tshark-interfaces.txt" >&2 || true
+    exit 1
+fi
+if [[ ! -s "$report_dir/tshark-interfaces.txt" ]]; then
+    echo 'TShark returned no capture interfaces for the campus-ops service account.' >&2
+    exit 1
+fi
+
+if [[ "$interface" != auto ]] && ! ip link show dev "$interface" >/dev/null 2>&1; then
+    echo "Requested interface does not exist: $interface" >&2
+    exit 64
+fi
+
 install -d -m 0750 -o campus-ops -g campus-ops /var/lib/campus-ops
 install -d -m 0750 -o root -g campus-ops /etc/campus-ops
 cat > /etc/campus-ops/campus-ops.env <<EOF
