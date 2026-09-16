@@ -7,48 +7,65 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root 'dist\MONWindows.exe'
+$sourceExe = Join-Path $root 'dist\MONWindows.exe'
+$installDir = Join-Path $env:ProgramFiles 'MON'
+$installedExe = Join-Path $installDir 'MONWindows.exe'
+$dataDir = Join-Path $env:ProgramData 'MON'
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Run PowerShell as Administrator to install or remove MON Windows service.'
 }
 
-if ($Remove) {
-    if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
-        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-        sc.exe delete $ServiceName | Out-Null
-        Write-Host "Removed service $ServiceName"
-    } else {
-        Write-Host "Service $ServiceName is not installed"
+function Remove-ServiceIfPresent([string]$Name) {
+    $service = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    if (-not $service) { return }
+    Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue
+    sc.exe delete $Name | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to delete Windows service $Name." }
+    for ($i = 0; $i -lt 20; $i++) {
+        if (-not (Get-Service -Name $Name -ErrorAction SilentlyContinue)) { return }
+        Start-Sleep -Milliseconds 250
     }
+    throw "Windows service $Name did not disappear after deletion."
+}
+
+if ($Remove) {
+    Remove-ServiceIfPresent $ServiceName
+    Write-Host "Removed service $ServiceName"
+    Write-Host "Program data was preserved at $dataDir"
     exit 0
 }
 
-if (-not (Test-Path $exe)) {
-    throw "Executable not found: $exe. Run scripts\build_windows.ps1 first."
+if (-not (Test-Path $sourceExe)) {
+    throw "Executable not found: $sourceExe. Run scripts\build_windows.ps1 first."
 }
 
-# Remove the legacy pre-Windows service name if it exists so two MON runtimes can
-# never compete for the same API port or capture adapter.
+# Remove legacy service names so two MON processes cannot compete for port 8765 or the
+# selected Npcap adapter.
 $legacy = 'CampusCyberOperationsPlatform'
-if ($legacy -ne $ServiceName -and (Get-Service -Name $legacy -ErrorAction SilentlyContinue)) {
-    Stop-Service -Name $legacy -Force -ErrorAction SilentlyContinue
-    sc.exe delete $legacy | Out-Null
-    Start-Sleep -Milliseconds 800
+if ($legacy -ne $ServiceName) { Remove-ServiceIfPresent $legacy }
+Remove-ServiceIfPresent $ServiceName
+
+New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+Copy-Item -Path $sourceExe -Destination $installedExe -Force
+
+if (-not (Test-Path $installedExe)) {
+    throw "Installed executable is missing: $installedExe"
+}
+$sourceHash = (Get-FileHash $sourceExe -Algorithm SHA256).Hash
+$installedHash = (Get-FileHash $installedExe -Algorithm SHA256).Hash
+if ($sourceHash -ne $installedHash) {
+    throw 'Installed MONWindows.exe hash does not match the built artifact.'
 }
 
-if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
-    Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-    sc.exe delete $ServiceName | Out-Null
-    Start-Sleep -Seconds 1
-}
-
-$bin = '"' + $exe + '"'
+$bin = '"' + $installedExe + '"'
 sc.exe create $ServiceName binPath= $bin start= delayed-auto DisplayName= $DisplayName | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'sc.exe create failed.' }
 sc.exe description $ServiceName 'Native Windows MON: one TShark/Npcap packet source, evidence-backed network monitoring.' | Out-Null
 sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/15000/restart/30000 | Out-Null
+sc.exe failureflag $ServiceName 1 | Out-Null
 
 $serviceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
 New-ItemProperty `
@@ -57,7 +74,8 @@ New-ItemProperty `
     -PropertyType MultiString `
     -Value @(
         'CAMPUS_OPS_NO_BROWSER=1',
-        'CAMPUS_OPS_INTERFACE=auto'
+        'CAMPUS_OPS_INTERFACE=auto',
+        "CAMPUS_OPS_DATA_DIR=$dataDir"
     ) `
     -Force | Out-Null
 
@@ -69,5 +87,7 @@ if ($service.Status -ne 'Running') {
 }
 
 Write-Host "Installed and started $ServiceName"
-Write-Host "Executable: $exe"
+Write-Host "Executable: $installedExe"
+Write-Host "SHA-256: $installedHash"
+Write-Host "Data: $dataDir"
 Write-Host 'Interface selection: auto (native Windows Wi-Fi/Ethernet preferred over virtual adapters)'
