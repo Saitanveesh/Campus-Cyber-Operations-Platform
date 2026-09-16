@@ -27,17 +27,25 @@ def load_configurator():
     return module
 
 
-async def test_unplugged_ethernet_cannot_block_wifi_failover():
-    worker = NetworkDiscoveryWorker(EventBus(), confirmations=2)
+async def test_unplugged_ethernet_fails_over_after_confirmed_link_loss():
+    worker = NetworkDiscoveryWorker(EventBus(), confirmations=2, unavailable_confirmations=3)
     eth = candidate("enp0s3", default_route=True, route_metric=1)
     wifi = candidate("wlp2s0", default_route=True, route_metric=600, category="wireless")
     worker.selected = elect_network([eth])
     worker.candidates = [replace(eth, is_up=False), wifi]
     proposed = elect_network(worker.candidates)
+
     await worker._consider(proposed)
-    assert worker.selected is None  # Never keep capturing on the disconnected device.
+    assert worker.selected is not None and worker.selected.interface == "enp0s3"
     await worker._consider(proposed)
-    assert worker.selected.interface == "wlp2s0"
+    assert worker.selected is not None and worker.selected.interface == "enp0s3"
+
+    # Three consecutive down observations confirm loss. The replacement interface
+    # still requires its normal two selection confirmations before it takes over.
+    await worker._consider(proposed)
+    assert worker.selected is None
+    await worker._consider(proposed)
+    assert worker.selected is not None and worker.selected.interface == "wlp2s0"
 
 
 async def test_route_loss_rechecks_old_score_before_switching():
