@@ -22,13 +22,16 @@ class StableOrchestrator(Orchestrator):
 
         # Cyber-range links can momentarily disappear from one discovery poll while
         # NetworkManager, DHCP or a virtual switch updates state. Stable mode requires
-        # five consecutive misses before it tears down the live session.
+        # five consecutive misses before it tears down the live session. Material
+        # address/route identity changes also require repeated confirmation so DHCP or
+        # IPv6 privacy churn cannot restart TShark after one noisy poll.
         self.network = NetworkDiscoveryWorker(
             self.bus,
             interval=self.settings.network_poll_seconds,
             switch_margin=self.settings.interface_switch_margin,
             confirmations=self.settings.interface_confirmations,
             unavailable_confirmations=5,
+            identity_confirmations=3,
         )
 
         self.workers = [
@@ -65,6 +68,7 @@ class StableOrchestrator(Orchestrator):
         result["runtime_profile"] = "stable-single-source"
         result["authoritative_packet_source"] = "tshark"
         result["link_loss_confirmations"] = 5
+        result["network_identity_confirmations"] = 3
         result["capture_state_policy"] = "process-health-only"
         result["topology_source"] = "same-tshark-packet-stream"
         return result
