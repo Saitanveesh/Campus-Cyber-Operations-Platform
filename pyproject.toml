@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "campus-cyber-operations-platform"
-version = "0.4.2"
+version = "0.5.0"
 description = "Stable single-source campus cyber monitoring platform"
 requires-python = ">=3.12"
 dependencies = [
@@ -27,7 +27,6 @@ build = [
 
 [project.scripts]
 campus-ops = "campus_ops.main:main"
-campus-ops-agent = "campus_ops.agent:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -48,15 +47,7 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint.per-file-ignores]
-"src/campus_ops/advanced_layer.py" = ["I001", "F401"]
-"src/campus_ops/context_assistant.py" = ["I001"]
-"src/campus_ops/enterprise_layer.py" = ["I001"]
-"src/campus_ops/operator_refinement.py" = ["I001"]
-"src/campus_ops/red_panel.py" = ["BLE001"]
-"src/campus_ops/runtime_ui.py" = ["I001"]
 "src/campus_ops/stable_operator_ui.py" = ["I001"]
-"src/campus_ops/stable_ui.py" = ["I001"]
 "src/campus_ops/workers/asset_engine.py" = ["I001"]
 "src/campus_ops/workers/flow_engine.py" = ["I001"]
 "src/campus_ops/workers/incidents.py" = ["I001"]
-"src/campus_ops/workers/operations_watchdog.py" = ["SIM114"]
