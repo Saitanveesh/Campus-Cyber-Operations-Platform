@@ -1,0 +1,154 @@
+name: ubuntu-ci
+on:
+  push:
+    branches: [monitor-v1]
+  pull_request:
+    branches: [monitor-v1, main]
+
+concurrency:
+  group: ubuntu-ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install --no-deps -e .
+          python -m pip check
+      - name: Lint stable source and tests
+        run: ruff check src tests
+      - name: Validate bootstrap scripts
+        run: |
+          bash -n bootstrap.sh
+          bash -n scripts/install_ubuntu_stable.sh
+          bash -n scripts/install_kali.sh
+          bash -n scripts/wait_for_console.sh
+          bash -n scripts/diagnose_runtime.sh
+      - name: Tests
+        run: pytest -q
+
+  bootstrap:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install stable Ubuntu monitor
+        shell: bash
+        run: |
+          sudo bash scripts/install_ubuntu_stable.sh --interface auto
+          sudo bash scripts/wait_for_console.sh --timeout 60
+          sudo /opt/campus-ops/venv/bin/python - <<'PY'
+          from campus_ops.deployment_check import check
+          report = check()
+          assert report['state'] == 'READY', report
+          assert report['profile'] == 'stable-single-source', report
+          assert report['capture']['verified'], report['capture']
+          assert report['capture']['backend'] == 'tshark', report['capture']
+          assert report['capture']['interface'] not in {None, 'any', 'lo'}, report['capture']
+          assert report['capture']['runtime_process_verified'], report['capture']
+          runtime = report['capture'].get('runtime') or {}
+          assert runtime.get('state') == 'ACTIVE', runtime
+          assert runtime.get('backend') == 'tshark', runtime
+          assert runtime.get('interface') not in {None, 'any', 'lo'}, runtime
+          assert int(runtime.get('process_pid') or 0) > 0, runtime
+          PY
+      - name: Verify legacy services and configuration are absent
+        run: |
+          test ! -e /etc/campus-ops/managed-feeds.env
+          test ! -e /etc/systemd/system/campus-ops-sensor@.service
+          test ! -e /etc/systemd/system/campus-ops-falco.service
+          for unit in \
+            campus-ops-sensor@zeek.service \
+            campus-ops-sensor@suricata.service \
+            campus-ops-sensor@opencanary.service \
+            campus-ops-falco.service; do
+            if sudo systemctl is-active --quiet "$unit"; then
+              echo "$unit unexpectedly active"
+              exit 1
+            fi
+          done
+      - name: Verify stable live API
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request
+          with urllib.request.urlopen('http://127.0.0.1:8765/api/v1/live/status', timeout=5) as r:
+              status = json.load(r)
+          assert status['runtime_profile'] == 'stable-single-source', status
+          assert status['authoritative_packet_source'] == 'tshark', status
+          assert status['version'] == '0.5.0', status
+          assert status['network_identity_confirmations'] == 3, status
+          assert status.get('session_id'), status
+          assert isinstance(status.get('network'), dict) and status['network'].get('interface'), status
+          capture = status['live']['capture']
+          assert capture.get('state') == 'ACTIVE', capture
+          assert capture.get('backend') == 'tshark', capture
+          assert capture.get('interface') not in {None, 'any', 'lo'}, capture
+          assert int(capture.get('process_pid') or 0) > 0, capture
+          assert status['workers']['network-discovery']['state'] == 'HEALTHY', status['workers']
+          assert status['workers']['capture']['state'] == 'HEALTHY', status['workers']
+          PY
+      - name: Soak session interface and TShark PID
+        run: |
+          python3 - <<'PY'
+          import json
+          import time
+          import urllib.request
+
+          url = 'http://127.0.0.1:8765/api/v1/live/status'
+          baseline = None
+          for sample in range(10):
+              with urllib.request.urlopen(url, timeout=5) as response:
+                  status = json.load(response)
+              capture = status['live']['capture']
+              current = (
+                  status.get('session_id'),
+                  status.get('network', {}).get('interface'),
+                  capture.get('process_pid'),
+              )
+              assert all(current), (sample, status)
+              assert capture.get('state') == 'ACTIVE', (sample, capture)
+              assert capture.get('backend') == 'tshark', (sample, capture)
+              assert capture.get('interface') == current[1], (sample, status)
+              assert status['workers']['network-discovery']['state'] == 'HEALTHY', status['workers']
+              assert status['workers']['capture']['state'] == 'HEALTHY', status['workers']
+              if baseline is None:
+                  baseline = current
+              else:
+                  assert current == baseline, (sample, baseline, current, status)
+              time.sleep(2)
+          print('stable capture tuple:', baseline)
+          PY
+      - name: Collect service diagnostics
+        if: always()
+        run: |
+          mkdir -p bootstrap-logs
+          sudo journalctl -u campus-ops.service --no-pager > bootstrap-logs/journal.txt || true
+          sudo cp -r /var/lib/campus-ops/install /etc/campus-ops/deployment.json bootstrap-logs/ 2>/dev/null || true
+          sudo chmod -R a+rX bootstrap-logs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bootstrap-${{ matrix.os }}
+          path: bootstrap-logs

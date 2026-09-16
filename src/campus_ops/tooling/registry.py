@@ -2,59 +2,35 @@ from __future__ import annotations
 
 import os
 import shutil
-from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
-@dataclass(frozen=True, slots=True)
-class ToolStatus:
-    key: str
-    label: str
-    purpose: str
-    available: bool
-    path: str | None
-    required: bool
-
-
-TOOL_SPECS: tuple[tuple[str, str, str, tuple[str, ...], bool], ...] = (
-    ("dumpcap", "dumpcap", "privileged packet acquisition", ("dumpcap",), False),
-    ("tshark", "TShark", "deep protocol decoding", ("tshark",), False),
-    ("suricata", "Suricata", "IDS/signature telemetry", ("suricata",), False),
-    ("yara", "YARA", "file-content rule matching", ("yara64", "yara"), False),
-)
-
-
-def _find_npcap() -> str | None:
-    if os.name != "nt":
-        return None
-    candidates = (
-        Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "Npcap" / "wpcap.dll",
-        Path(os.environ.get("WINDIR", r"C:\Windows")) / "SysWOW64" / "Npcap" / "wpcap.dll",
-    )
-    for path in candidates:
-        if path.exists():
-            return str(path)
-    return None
-
-
-def probe_tools() -> list[ToolStatus]:
-    statuses: list[ToolStatus] = []
-    npcap = _find_npcap()
-    statuses.append(
-        ToolStatus(
-            key="npcap",
-            label="Npcap",
-            purpose="Windows packet capture driver",
-            available=npcap is not None,
-            path=npcap,
-            required=False,
+def _candidate_paths(name: str) -> tuple[str, ...]:
+    if name != "tshark":
+        return ()
+    if os.name == "nt":
+        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        return (
+            str(Path(program_files) / "Wireshark" / "tshark.exe"),
+            "tshark.exe",
+            "tshark",
         )
-    )
-    for key, label, purpose, executables, required in TOOL_SPECS:
-        path = next((shutil.which(exe) for exe in executables if shutil.which(exe)), None)
-        statuses.append(ToolStatus(key, label, purpose, path is not None, path, required))
-    return statuses
+    return ("tshark", "/usr/bin/tshark", "/usr/local/bin/tshark")
 
 
-def probe_tools_json() -> list[dict[str, object]]:
-    return [asdict(item) for item in probe_tools()]
+def resolve_executable(name: str) -> str | None:
+    """Resolve an executable supported by the stable runtime.
+
+    Stable MON deliberately recognizes only TShark. Secondary scanners, IDS engines,
+    response tools and active-probe utilities are outside this runtime profile.
+    """
+    for candidate in _candidate_paths(name):
+        expanded = os.path.expandvars(os.path.expanduser(candidate))
+        if os.path.isabs(expanded):
+            if Path(expanded).is_file():
+                return expanded
+            continue
+        found = shutil.which(expanded)
+        if found:
+            return found
+    return None
