@@ -2,48 +2,23 @@ from campus_ops.main import build_app
 from campus_ops.runtime_ui import _clean_console_copy
 
 
-def test_runtime_app_installs_watchdog_assistant_investigation_and_admin_routes(
+def test_stable_runtime_mounts_operational_backends_without_legacy_runtime_stack(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     app = build_app()
     paths = {getattr(route, "path", "") for route in app.routes}
     assert "/api/v1/system/watchdog" in paths
-    assert "/api/v1/system/assistant/brief" in paths
-    assert "/api/v1/system/assistant/context/{view}" in paths
-    assert "/api/v1/system/assistant/stop" in paths
-    assert "/api/v1/system/voice/stop" in paths
-    assert "/api/v1/system/capabilities" in paths
-    assert "/api/v1/system/diagnostics/{check}" in paths
+    assert "/api/v1/system/diagnostics" in paths
+    assert "/api/v1/anomalies" in paths
     assert "/api/v1/investigate/{target}" in paths
-    assert "/api/v1/investigate/{target}/deep-probe" in paths
-    assert "/api/v1/investigate/{target}/snapshot" in paths
-    assert "/api/v1/investigate/{target}/isolate" in paths
-    assert "/api/v1/investigate/{target}/restore" in paths
-    assert "/api/v1/admin/login" in paths
-    assert "/api/v1/admin/status" in paths
-    assert "/api/v1/admin/targets" in paths
-    assert "/api/v1/admin/forensics/{target}" in paths
-    assert "/api/v1/admin/forensics/{target}/probe" in paths
-    assert "/api/v1/admin/targets/{target}/snapshot" in paths
-    assert "/api/v1/admin/targets/{target}/isolate" in paths
-    assert "/api/v1/admin/targets/{target}/restore" in paths
-    assert "/api/v1/admin/targets/{target}/connect" in paths
-    assert "/api/v1/admin/deep/{target}" in paths
-    assert "/api/v1/admin/deep/{target}/snapshot" in paths
-    assert "/api/v1/admin/deep/{target}/terminate" in paths
-    assert "/api/v1/admin/deep/{target}/block-peer" in paths
-    assert "/api/v1/admin/deep/{target}/quarantine" in paths
-    assert "/api/v1/admin/iocs" in paths
-    assert "/api/v1/admin/iocs/{indicator_id}" in paths
-    assert "/api/v1/admin/iocs/matches/live" in paths
-    assert app.state.runtime_extensions_installed is True
-    assert app.state.context_assistant_installed is True
-    assert app.state.capability_routes_installed is True
-    assert app.state.investigation_routes_installed is True
-    assert app.state.admin_routes_installed is True
-    assert app.state.admin_deep_routes_installed is True
-    assert app.state.ioc_routes_installed is True
+    assert "/api/v1/pathspace/{target}" in paths
+    assert "/api/v1/isolation/{target}" in paths
+    assert "/api/v1/isolation/{target}/restore" in paths
+    assert app.state.operational_core_installed is True
+    assert app.state.path_analysis_installed is True
+    assert app.state.watchdog_api_installed is True
+    assert getattr(app.state, "runtime_extensions_installed", False) is False
 
 
 def test_console_copy_removes_old_taglines():
