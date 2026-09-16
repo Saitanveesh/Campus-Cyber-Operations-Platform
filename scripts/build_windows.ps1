@@ -20,13 +20,13 @@ Write-Host 'Running release quality gate...'
 if (Test-Path 'build') { Remove-Item -Recurse -Force 'build' }
 if (Test-Path 'dist') { Remove-Item -Recurse -Force 'dist' }
 
-Write-Host 'Building CampusOperationalConsole.exe...'
+Write-Host 'Building CampusCyberOperationsPlatform.exe...'
 .\.venv-build\Scripts\pyinstaller.exe `
   --noconfirm `
   --clean `
   --onefile `
   --noconsole `
-  --name CampusOperationalConsole `
+  --name CampusCyberOperationsPlatform `
   --paths src `
   --add-data 'src/campus_ops/ui/index.html;campus_ops/ui' `
   --collect-submodules campus_ops `
@@ -34,7 +34,7 @@ Write-Host 'Building CampusOperationalConsole.exe...'
   --collect-all fastapi `
   src/campus_ops/__main__.py
 
-$Exe = Resolve-Path 'dist\CampusOperationalConsole.exe'
+$Exe = Resolve-Path 'dist\CampusCyberOperationsPlatform.exe'
 $Hash = (Get-FileHash $Exe -Algorithm SHA256).Hash
 Write-Host ''
 Write-Host 'Build complete:'
