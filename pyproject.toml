@@ -30,8 +30,7 @@ campus-ops = "campus_ops.main:main"
 campus-ops-agent = "campus_ops.agent:main"
 
 [tool.setuptools]
-package-dir = {"" = "src"
-}
+package-dir = {"" = "src"}
 include-package-data = true
 
 [tool.setuptools.packages.find]
