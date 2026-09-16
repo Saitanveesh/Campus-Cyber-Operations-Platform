@@ -29,8 +29,28 @@ def _number(value: object) -> float:
         return 0.0
 
 
+def _empty_summary() -> dict[str, object]:
+    return {
+        "flow_count": 0,
+        "peer_count": 0,
+        "alert_count": 0,
+        "incident_count": 0,
+        "open_incident_count": 0,
+        "packets": 0,
+        "bytes": 0,
+        "observed_bps": 0.0,
+        "top_peers": [],
+        "top_services": [],
+        "top_applications": [],
+    }
+
+
 def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]:
-    """Build a passive report from current-session MON evidence only."""
+    """Build a passive report from current-session MON evidence only.
+
+    A valid IP address is not evidence that a host exists.  Unseen targets therefore
+    return NOT_OBSERVED with no numeric risk score or benign/security verdict.
+    """
     ip = _valid_target(target)
     target = str(ip)
     live = snapshot.get("live") if isinstance(snapshot.get("live"), dict) else {}
@@ -72,6 +92,31 @@ def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]
         for item in live.get("packet_feed", [])
         if isinstance(item, dict) and _contains_ip(item.get("payload"), target)
     ][:50]
+
+    observed = bool(asset or flows or edges or alerts or incidents or packets)
+    if not observed:
+        return {
+            "target": target,
+            "scope": "PRIVATE_OR_LOCAL" if ip.is_private else "PUBLIC",
+            "session_id": snapshot.get("session_id"),
+            "observed": False,
+            "asset": None,
+            "flows": [],
+            "topology_edges": [],
+            "alerts": [],
+            "incidents": [],
+            "recent_packets": [],
+            "risk": {
+                "score": None,
+                "assessment": "NOT_OBSERVED",
+                "reasons": [
+                    "No asset, packet, flow, topology, alert, or incident evidence exists for this target in the current MON session."
+                ],
+                "claim": "NO_SECURITY_VERDICT_WITHOUT_EVIDENCE",
+            },
+            "summary": _empty_summary(),
+            "operator_mode": "PASSIVE_ONLY",
+        }
 
     peers: dict[str, int] = {}
     services: dict[str, int] = {}
@@ -116,20 +161,18 @@ def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]
     if open_incidents:
         reasons.append(f"{len(open_incidents)} open incident record(s)")
 
-    if risk_score >= 80:
-        assessment = "HIGH ATTENTION"
-    elif risk_score >= 50:
-        assessment = "REVIEW"
+    if risk_score >= 70:
+        assessment = "HIGH_PRIORITY_INVESTIGATION"
     elif risk_score >= 20:
-        assessment = "WATCH"
+        assessment = "ANOMALOUS_ACTIVITY_OBSERVED"
     else:
-        assessment = "NO STRONG CURRENT INDICATORS"
+        assessment = "OBSERVED_NO_CURRENT_ANOMALY"
 
     return {
         "target": target,
         "scope": "PRIVATE_OR_LOCAL" if ip.is_private else "PUBLIC",
         "session_id": snapshot.get("session_id"),
-        "observed": bool(asset or flows or edges or alerts or incidents or packets),
+        "observed": True,
         "asset": asset,
         "flows": flows[:100],
         "topology_edges": edges[:100],
