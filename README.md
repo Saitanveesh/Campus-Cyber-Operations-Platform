@@ -1,20 +1,39 @@
-# Campus Cyber Operations Platform — Stable Monitor 0.4
+# Campus Cyber Operations Platform — Stable Monitor 0.4.2
 
-`monitor-v1` now defaults to a deliberately reduced monitoring runtime for authorized lab and campus networks.
+`monitor-v1` is the stabilized monitoring runtime for authorized lab and campus networks.
 
-## Why the runtime was simplified
+## Runtime contract
 
-Field testing exposed instability from running several independent packet/sensor pipelines at the same time. It also made the console overstate what was known about observed IP addresses. Stable 0.4 therefore follows three rules:
+Stable MON is built around one acquisition chain:
 
 1. **One authoritative live packet source:** TShark.
-2. **Local assets require evidence:** an address is not promoted to the Assets inventory until it is observed repeatedly as a local source with a valid unicast MAC address.
-3. **Fewer consoles:** the production UI exposes only Overview, Network, Assets, Traffic, Security and System.
+2. **One selected monitoring interface:** automatic selection prefers the active routed network and uses confirmation/hysteresis before changing it.
+3. **One live monitoring session:** short interface observations do not immediately destroy the session.
+4. **Evidence-backed state:** local assets require repeated local source-frame evidence with a valid unicast MAC address.
+5. **Derived views, not extra capture engines:** Topology, Path Space, Assets, Traffic and Security are computed from the same TShark packet stream.
 
-Zeek, Suricata, Falco, OpenCanary, SNMP, syslog, flow-export collectors, forensic capture and experimental enterprise consoles remain source-code experiments or legacy integrations. They are **not started by the stable Ubuntu runtime**.
+Zeek, Suricata, Falco, OpenCanary, SNMP, syslog, flow-export collectors and the older experimental enterprise consoles are **not started by the stable Ubuntu runtime**.
+
+## Stable console
+
+The primary navigation exposes:
+
+- Overview
+- Network
+- Topology
+- Path Space
+- Assets
+- Traffic
+- Security
+- Investigation
+- Forensics
+- System
+
+There is no separate **Admin** panel in stable mode. **Investigation** and **Forensics** are first-class protected workspaces in the normal navigation. They require a local-console operator sign-in and expose passive target/evidence functions only. The stable operator API does not mount active probe, remote-console or containment endpoints from the legacy admin console.
 
 ## Fresh Ubuntu install
 
-Use Ubuntu 22.04 or newer with systemd and an active Ethernet/Wi-Fi connection.
+Use Ubuntu 22.04 or newer with systemd and an active network connection. For the normal direct-LAN deployment, leave interface selection on `auto`.
 
 ```bash
 sudo apt update
@@ -24,7 +43,7 @@ cd Campus-Cyber-Operations-Platform
 bash bootstrap.sh
 ```
 
-`bootstrap.sh` selects the stable Ubuntu installer automatically. It installs the managed Python runtime and TShark, configures Wireshark's capture helper permissions, disables old parallel managed sensors if they exist, installs the systemd service, waits for the HTTP console and runs the post-install check.
+`bootstrap.sh` selects the stable Ubuntu installer automatically. It installs the managed Python runtime and TShark, configures Wireshark/dumpcap capture permissions, disables old parallel managed sensors if they exist, installs the systemd service, waits for the real MON capture runtime to become ready, and runs the post-install deployment check.
 
 Console: `http://127.0.0.1:8765`
 
@@ -37,22 +56,28 @@ git pull --ff-only origin monitor-v1
 bash bootstrap.sh
 ```
 
-## Stable runtime behavior
+## Interface selection and session stability
 
-The interface selector defaults to `auto`. The platform chooses an active routed physical interface and uses hysteresis before declaring a link unavailable, so a single transient poll does not destroy the session.
+The interface selector defaults to `auto`. MON detects the active network interface and requires repeated confirmation before switching interfaces or accepting a material network-identity change. Stable mode also requires multiple consecutive missing/down observations before declaring the network unavailable.
 
-The capture state has intentionally simple semantics:
+This prevents a single NetworkManager/DHCP/routing observation from resetting the session or restarting TShark.
 
-- `ACTIVE` — TShark is receiving packets.
-- `LINK_UP_IDLE` — capture process is healthy, but no packet arrived during the last interval.
-- `WAITING` — no confirmed active interface/session yet.
-- `ERROR` — TShark actually exited or could not open the interface.
+An explicitly selected interface can still be configured when a lab requires it, but `auto` is the normal deployment setting.
 
-`LINK_UP_IDLE` is not an uplink failure.
+## Capture-state semantics
+
+Capture state is based on the actual TShark process, not on packet arrival rate:
+
+- `ACTIVE` — the managed TShark process is alive and bound to the selected interface.
+- `WAITING` — there is not yet a confirmed interface/session to bind.
+- `UNAVAILABLE` — TShark is not installed/resolvable.
+- `ERROR` — the managed TShark process exited, could not start, or its output stream failed.
+
+When the wire is quiet, capture remains `ACTIVE` and `traffic_activity` becomes `QUIET`. Packet silence does **not** trigger an interface rebind, session reset or false link failure.
 
 ## Asset truth model
 
-The **Assets** page is local inventory, not a list of every IP seen in packet headers.
+The **Assets** page is local inventory, not a list of every IP appearing in packet headers.
 
 An asset is admitted only when:
 
@@ -71,7 +96,7 @@ curl -s http://127.0.0.1:8765/api/v1/live/status | python3 -m json.tool
 curl -s http://127.0.0.1:8765/api/v1/system/version | python3 -m json.tool
 ```
 
-The version endpoint records the deployed branch, commit and stable runtime profile.
+A deployment is ready only when the managed service, network-discovery worker, capture worker, selected interface and the actual managed TShark PID agree. The version endpoint records the deployed branch, commit and stable runtime profile.
 
 ## Development
 
@@ -83,6 +108,8 @@ python3.12 -m venv .venv
 CAMPUS_OPS_NO_BROWSER=1 .venv/bin/python -m campus_ops
 ```
 
-## Scope
+## Visibility scope
 
-This is a passive monitoring console. It does not infer physical network paths, does not claim that every remote IP is a local device, and stable mode does not start automatic containment or multiple competing packet engines.
+MON reports what reaches its capture interface. A normal switched access port does not automatically receive every unicast conversation on the LAN. Monitoring other hosts' traffic therefore depends on sensor placement such as a SPAN/mirror port, TAP, bridge/gateway position, or another legitimate telemetry source.
+
+The stable console does not infer physical switch/router hops unless infrastructure evidence supports them, and it does not treat every observed remote IP as a local device.
