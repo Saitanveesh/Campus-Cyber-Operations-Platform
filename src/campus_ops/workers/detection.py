@@ -9,7 +9,6 @@ from campus_ops.models import Event, EventKind, Severity, WorkerState
 from campus_ops.state import LiveState
 from campus_ops.workers.base import BaseWorker
 
-
 _AUTH_SERVICE_PORTS = {21, 22, 23, 445, 3389, 5900}
 _LATERAL_MOVEMENT_PORTS = {22, 445, 3389}
 
