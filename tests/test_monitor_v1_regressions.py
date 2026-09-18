@@ -200,3 +200,10 @@ def test_console_recovers_from_open_but_stale_websocket_every_second():
     assert "setInterval(()=>{const stale=" in source
     assert "refresh()},1000)" in source
     assert "MON live render failed" in source
+
+
+def test_direct_frozen_exe_disables_uvicorn_console_logging():
+    source = Path("src/campus_ops/main.py").read_text(encoding="utf-8")
+    assert "log_config=None" in source
+    assert "access_log=False" in source
+    assert "--noconsole" in source
