@@ -162,3 +162,27 @@ def test_package_is_windows_release_and_has_no_agent_entry_point():
     project = Path("pyproject.toml").read_text()
     assert 'version = "1.0.0"' in project
     assert "campus-ops-agent" not in project
+
+
+def test_console_does_not_flap_offline_on_one_transport_miss():
+    source = Path("src/campus_ops/ui/index.html").read_text()
+    assert "TRANSPORT_GRACE_MS=12000" in source
+    assert "last known state retained" in source
+    assert "markTransportFailure()" in source
+    assert "catch(e){markTransportFailure()}" in source
+
+
+def test_unmeasured_interface_rates_are_not_rendered_as_zero():
+    ui = Path("src/campus_ops/ui/index.html").read_text()
+    telemetry = Path("src/campus_ops/workers/telemetry.py").read_text()
+    assert "telemetry_rate_valid===true" in ui
+    assert "'— / —'" in ui
+    assert '"telemetry_rate_valid": rate_valid' in telemetry
+    assert '"rx_bps": None' in telemetry
+    assert "if session_id and rate_valid:" in telemetry
+
+
+def test_windows_route_aliases_are_case_normalized():
+    source = Path("src/campus_ops/workers/windows_network.py").read_text()
+    assert "key = name.casefold()" in source
+    assert "routes.get(name.casefold()" in source
