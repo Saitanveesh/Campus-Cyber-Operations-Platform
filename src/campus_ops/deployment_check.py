@@ -12,6 +12,7 @@ from pathlib import Path
 import psutil
 
 from campus_ops.tooling.registry import resolve_executable
+from campus_ops.windows_process import hidden_subprocess_kwargs
 from campus_ops.workers.windows_network import discover_candidates, elect_network
 
 SERVICE_NAME = "MONWindows"
@@ -27,6 +28,7 @@ def _service_state() -> tuple[bool, str]:
             text=True,
             timeout=5,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, f"Windows service query failed: {exc}"
@@ -67,6 +69,7 @@ def _tshark_interfaces(tshark: str) -> tuple[bool, str]:
             text=True,
             timeout=10,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, str(exc)
@@ -86,6 +89,7 @@ def _npcap_state() -> tuple[bool, str]:
             text=True,
             timeout=5,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, f"Npcap service query failed: {exc}"
