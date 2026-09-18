@@ -111,11 +111,12 @@ def _route_table() -> dict[str, tuple[bool, int | None, str | None]]:
         except (TypeError, ValueError):
             metric = None
         gateway = str(row.get("NextHop") or "").strip() or None
-        previous = routes.get(name)
+        key = name.casefold()
+        previous = routes.get(key)
         if previous is None or (
             metric is not None and (previous[1] is None or metric < previous[1])
         ):
-            routes[name] = (True, metric, gateway)
+            routes[key] = (True, metric, gateway)
     return routes
 
 
@@ -175,7 +176,7 @@ def discover_candidates() -> list[NetworkCandidate]:
                         prefixes.append(prefix)
         stat = stats.get(name)
         io = counters.get(name)
-        default_route, metric, gateway = routes.get(name, (False, None, None))
+        default_route, metric, gateway = routes.get(name.casefold(), (False, None, None))
         candidates.append(
             NetworkCandidate(
                 name=name,
