@@ -17,17 +17,83 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     throw 'Run PowerShell as Administrator to install or remove MON Windows service.'
 }
 
+function Test-ServiceScmPresent([string]$Name) {
+    $null = & sc.exe query $Name 2>&1
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Wait-ServiceScmDeleted([string]$Name, [int]$TimeoutSeconds = 30) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $output = (& sc.exe query $Name 2>&1 | Out-String)
+        $code = $LASTEXITCODE
+
+        # ERROR_SERVICE_DOES_NOT_EXIST (1060) means SCM has fully released the name.
+        if ($code -eq 1060 -or $output -match 'FAILED\s+1060') {
+            return
+        }
+
+        Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    throw "Windows service $Name is still registered or pending deletion after $TimeoutSeconds seconds. Close Services.msc/Event Viewer handles or reboot once, then rerun bootstrap.ps1."
+}
+
 function Remove-ServiceIfPresent([string]$Name) {
-    $service = Get-Service -Name $Name -ErrorAction SilentlyContinue
-    if (-not $service) { return }
-    Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue
-    sc.exe delete $Name | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Failed to delete Windows service $Name." }
-    for ($i = 0; $i -lt 20; $i++) {
-        if (-not (Get-Service -Name $Name -ErrorAction SilentlyContinue)) { return }
-        Start-Sleep -Milliseconds 250
+    if (-not (Test-ServiceScmPresent $Name)) {
+        # A just-deleted service may already be invisible to Get-Service but still be
+        # pending deletion inside SCM. Give SCM a brief chance to release the name.
+        $probe = (& sc.exe query $Name 2>&1 | Out-String)
+        if ($probe -match 'FAILED\s+1072') {
+            Wait-ServiceScmDeleted $Name 30
+        }
+        return
     }
-    throw "Windows service $Name did not disappear after deletion."
+
+    Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 300
+
+    $deleteOutput = (& sc.exe delete $Name 2>&1 | Out-String).Trim()
+    $deleteCode = $LASTEXITCODE
+    if ($deleteCode -ne 0 -and $deleteCode -ne 1060 -and $deleteOutput -notmatch 'FAILED\s+1060') {
+        throw "Failed to delete Windows service $Name. sc.exe: $deleteOutput"
+    }
+
+    Wait-ServiceScmDeleted $Name 30
+}
+
+function New-MonServiceWithRetry(
+    [string]$Name,
+    [string]$BinaryPath,
+    [string]$ServiceDisplayName,
+    [int]$Attempts = 10
+) {
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        $createOutput = (
+            & sc.exe create $Name binPath= $BinaryPath start= delayed-auto DisplayName= $ServiceDisplayName 2>&1 |
+                Out-String
+        ).Trim()
+        $createCode = $LASTEXITCODE
+
+        if ($createCode -eq 0) {
+            return
+        }
+
+        $pendingDeletion = (
+            $createCode -eq 1072 -or
+            $createOutput -match 'FAILED\s+1072' -or
+            $createOutput -match 'marked for deletion'
+        )
+
+        if (-not $pendingDeletion) {
+            throw "sc.exe create failed with exit code $createCode. Output: $createOutput"
+        }
+
+        Write-Host "[MON] Service name is pending deletion; retrying registration ($attempt/$Attempts)..."
+        Start-Sleep -Seconds 2
+    }
+
+    throw "sc.exe create could not register $Name because Windows kept the previous service marked for deletion. Reboot Windows once, then rerun .\bootstrap.ps1."
 }
 
 if ($Remove) {
@@ -63,11 +129,16 @@ if ($sourceHash -ne $installedHash) {
 # MONWindows.exe contains a pywin32 ServiceFramework host. --service enters the
 # Service Control Manager dispatcher instead of starting the interactive/browser mode.
 $bin = '"' + $installedExe + '" --service'
-sc.exe create $ServiceName binPath= $bin start= delayed-auto DisplayName= $DisplayName | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'sc.exe create failed.' }
-sc.exe description $ServiceName 'Native Windows MON: one TShark/Npcap packet source, evidence-backed network monitoring.' | Out-Null
-sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/15000/restart/30000 | Out-Null
-sc.exe failureflag $ServiceName 1 | Out-Null
+New-MonServiceWithRetry -Name $ServiceName -BinaryPath $bin -ServiceDisplayName $DisplayName
+
+$descriptionOutput = (& sc.exe description $ServiceName 'Native Windows MON: one TShark/Npcap packet source, evidence-backed network monitoring.' 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) { throw "Failed to set service description: $descriptionOutput" }
+
+$failureOutput = (& sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/15000/restart/30000 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) { throw "Failed to configure service recovery: $failureOutput" }
+
+$flagOutput = (& sc.exe failureflag $ServiceName 1 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) { throw "Failed to enable failure actions: $flagOutput" }
 
 $serviceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
 New-ItemProperty `
