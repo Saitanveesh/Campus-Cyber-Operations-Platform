@@ -46,6 +46,8 @@ def _observed_targets(snapshot: dict[str, object]) -> list[dict[str, object]]:
         rows[ip] = {
             "ip": ip,
             "name": asset.get("hostname") or asset.get("dhcp_hostname") or "",
+            "vendor": asset.get("vendor") or "",
+            "mac": asset.get("mac") or "",
             "classification": asset.get("classification") or asset.get("role") or "LOCAL_ASSET",
             "last_seen": asset.get("last_seen"),
             "packets": int(asset.get("packets_as_source") or 0),
@@ -67,6 +69,8 @@ def _observed_targets(snapshot: dict[str, object]) -> list[dict[str, object]]:
                 {
                     "ip": ip,
                     "name": "",
+                    "vendor": "",
+                    "mac": "",
                     "classification": "OBSERVED_PACKET_PEER",
                     "last_seen": last_seen,
                     "packets": 0,
@@ -92,6 +96,8 @@ def _observed_targets(snapshot: dict[str, object]) -> list[dict[str, object]]:
                 {
                     "ip": ip,
                     "name": "",
+                    "vendor": "",
+                    "mac": "",
                     "classification": "OBSERVED_PACKET_PEER",
                     "last_seen": last_seen,
                     "packets": 0,
