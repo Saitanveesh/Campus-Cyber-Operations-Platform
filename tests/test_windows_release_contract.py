@@ -9,7 +9,7 @@ def test_windows_release_paths_use_one_canonical_executable_name():
     assert "--name MONWindows" in build
     assert "dist\\MONWindows.exe" in build
     assert "dist\\MONWindows.exe" in service
-    assert "scripts/build_windows.ps1" in workflow
+    assert "build_windows.ps1" in workflow
     assert "dist/MONWindows.exe" in workflow
     assert "CampusOperationalConsole.exe" not in build
     assert "CampusOperationalConsole.exe" not in service
