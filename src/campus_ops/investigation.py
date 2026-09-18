@@ -54,6 +54,12 @@ def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]
     ip = _valid_target(target)
     target = str(ip)
     live = snapshot.get("live") if isinstance(snapshot.get("live"), dict) else {}
+    metrics = live.get("metrics") if isinstance(live.get("metrics"), dict) else {}
+    passive_names = (
+        metrics.get("passive_ip_names")
+        if isinstance(metrics.get("passive_ip_names"), dict)
+        else {}
+    )
 
     assets = [item for item in live.get("assets", []) if isinstance(item, dict)]
     asset = next((item for item in assets if str(item.get("ip") or "") == target), None)
@@ -172,6 +178,42 @@ def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]
             "identity_evidence": asset.get("identity_evidence"),
             "confidence": asset.get("confidence"),
         }
+    else:
+        name_rows = passive_names.get(target)
+        if isinstance(name_rows, list) and name_rows:
+            hostname_sources: dict[str, str] = {}
+            for row in name_rows[:5]:
+                if not isinstance(row, dict):
+                    continue
+                source = str(row.get("source") or "PACKET_NAME")
+                name = str(row.get("name") or "")
+                if name:
+                    hostname_sources[source] = name
+            primary = next(iter(hostname_sources.values()), None)
+            if primary:
+                identity = {
+                    "hostname": primary,
+                    "hostname_sources": hostname_sources,
+                    "mac": None,
+                    "vendor": None,
+                    "role": "OBSERVED_PACKET_PEER",
+                    "vlan_id": None,
+                    "first_seen": None,
+                    "last_seen": None,
+                    "observed_ttl": None,
+                    "estimated_initial_ttl": None,
+                    "estimated_hops": None,
+                    "ip_stack_hint": None,
+                    "ip_stack_hint_confidence": None,
+                    "observed_services": [],
+                    "top_peers": [],
+                    "top_protocols": [],
+                    "top_application_names": [],
+                    "identity_evidence": (
+                        "PASSIVE_DNS_TLS_HTTP_PACKET_NAME_ASSOCIATION"
+                    ),
+                    "confidence": "PACKET_EVIDENCE",
+                }
 
     security_indicators = []
     for alert in alerts:
