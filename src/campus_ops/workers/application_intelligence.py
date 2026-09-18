@@ -134,8 +134,20 @@ class ApplicationIntelligenceWorker(BaseWorker):
                     self._remember_name(payload.get("dns_aaaa"), dns_query, "DNS_AAAA")
 
                 response_name = str(payload.get("dns_response_name") or "").strip()
-                if response_name:
-                    self._remember_name(payload.get("src_ip"), response_name, "DNS_RESPONSE")
+                transport = str(payload.get("transport") or "").upper()
+                src_port = str(payload.get("src_port") or "")
+                dst_port = str(payload.get("dst_port") or "")
+                discovery_ports = {src_port, dst_port}
+                if response_name and transport == "UDP" and "5353" in discovery_ports:
+                    self._remember_name(payload.get("src_ip"), response_name, "MDNS_RESPONSE")
+                    changed = True
+                llmnr_name = str(payload.get("llmnr_name") or "").strip()
+                if llmnr_name and transport == "UDP" and "5355" in discovery_ports:
+                    self._remember_name(payload.get("src_ip"), llmnr_name, "LLMNR")
+                    changed = True
+                nbns_name = str(payload.get("nbns_name") or "").strip()
+                if nbns_name and transport == "UDP" and "137" in discovery_ports:
+                    self._remember_name(payload.get("src_ip"), nbns_name, "NBNS")
                     changed = True
 
                 if changed:
