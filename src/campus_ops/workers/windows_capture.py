@@ -6,6 +6,7 @@ import os
 import subprocess
 from typing import Any
 
+from campus_ops.windows_process import hidden_asyncio_subprocess_kwargs, hidden_subprocess_kwargs
 from campus_ops.workers.capture import CaptureWorker
 
 
@@ -27,6 +28,7 @@ def _powershell_json(script: str, timeout: float = 5.0) -> object:
             text=True,
             timeout=timeout,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired):
         # Adapter metadata is advisory. A blocked/missing PowerShell process must not
@@ -89,6 +91,7 @@ class WindowsCaptureWorker(CaptureWorker):
                 "-D",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
+                **hidden_asyncio_subprocess_kwargs(),
             )
             stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10.0)
         except (OSError, TimeoutError):
