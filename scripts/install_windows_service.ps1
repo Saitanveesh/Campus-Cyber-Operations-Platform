@@ -28,7 +28,6 @@ function Wait-ServiceScmDeleted([string]$Name, [int]$TimeoutSeconds = 30) {
         $output = (& sc.exe query $Name 2>&1 | Out-String)
         $code = $LASTEXITCODE
 
-        # ERROR_SERVICE_DOES_NOT_EXIST (1060) means SCM has fully released the name.
         if ($code -eq 1060 -or $output -match 'FAILED\s+1060') {
             return
         }
@@ -41,8 +40,6 @@ function Wait-ServiceScmDeleted([string]$Name, [int]$TimeoutSeconds = 30) {
 
 function Remove-ServiceIfPresent([string]$Name) {
     if (-not (Test-ServiceScmPresent $Name)) {
-        # A just-deleted service may already be invisible to Get-Service but still be
-        # pending deletion inside SCM. Give SCM a brief chance to release the name.
         $probe = (& sc.exe query $Name 2>&1 | Out-String)
         if ($probe -match 'FAILED\s+1072') {
             Wait-ServiceScmDeleted $Name 30
@@ -69,31 +66,42 @@ function New-MonServiceWithRetry(
     [int]$Attempts = 10
 ) {
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
-        $createOutput = (
-            & sc.exe create $Name binPath= $BinaryPath start= delayed-auto DisplayName= $ServiceDisplayName 2>&1 |
-                Out-String
-        ).Trim()
-        $createCode = $LASTEXITCODE
+        try {
+            # New-Service handles quoting of "C:\Program Files\..." far more reliably
+            # than passing binPath= through Windows PowerShell 5.1 to sc.exe.
+            New-Service `
+                -Name $Name `
+                -BinaryPathName $BinaryPath `
+                -DisplayName $ServiceDisplayName `
+                -StartupType Automatic `
+                -ErrorAction Stop | Out-Null
 
-        if ($createCode -eq 0) {
+            # Convert Automatic to delayed automatic start after creation.
+            $configOutput = (& sc.exe config $Name start= delayed-auto 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) {
+                Remove-ServiceIfPresent $Name
+                throw "Failed to configure delayed-auto start. sc.exe: $configOutput"
+            }
             return
         }
+        catch {
+            $message = $_.Exception.Message
+            $pendingDeletion = (
+                $message -match '1072' -or
+                $message -match 'marked for deletion' -or
+                $message -match 'pending deletion'
+            )
 
-        $pendingDeletion = (
-            $createCode -eq 1072 -or
-            $createOutput -match 'FAILED\s+1072' -or
-            $createOutput -match 'marked for deletion'
-        )
+            if (-not $pendingDeletion) {
+                throw "Windows service creation failed: $message"
+            }
 
-        if (-not $pendingDeletion) {
-            throw "sc.exe create failed with exit code $createCode. Output: $createOutput"
+            Write-Host "[MON] Service name is pending deletion; retrying registration ($attempt/$Attempts)..."
+            Start-Sleep -Seconds 2
         }
-
-        Write-Host "[MON] Service name is pending deletion; retrying registration ($attempt/$Attempts)..."
-        Start-Sleep -Seconds 2
     }
 
-    throw "sc.exe create could not register $Name because Windows kept the previous service marked for deletion. Reboot Windows once, then rerun .\bootstrap.ps1."
+    throw "Windows could not register $Name because the previous service stayed marked for deletion. Reboot Windows once, then rerun .\scripts\install_windows_service.ps1."
 }
 
 if ($Remove) {
@@ -107,8 +115,6 @@ if (-not (Test-Path $sourceExe)) {
     throw "Executable not found: $sourceExe. Run scripts\build_windows.ps1 first."
 }
 
-# Remove legacy service names so two MON processes cannot compete for port 8765 or the
-# selected Npcap adapter.
 $legacy = 'CampusCyberOperationsPlatform'
 if ($legacy -ne $ServiceName) { Remove-ServiceIfPresent $legacy }
 Remove-ServiceIfPresent $ServiceName
@@ -127,7 +133,7 @@ if ($sourceHash -ne $installedHash) {
 }
 
 # MONWindows.exe contains a pywin32 ServiceFramework host. --service enters the
-# Service Control Manager dispatcher instead of starting the interactive/browser mode.
+# Service Control Manager dispatcher instead of starting interactive/browser mode.
 $bin = '"' + $installedExe + '" --service'
 New-MonServiceWithRetry -Name $ServiceName -BinaryPath $bin -ServiceDisplayName $DisplayName
 
