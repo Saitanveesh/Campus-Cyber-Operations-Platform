@@ -2,7 +2,7 @@ name: windows-ci
 
 on:
   push:
-    branches: [windows-native-v2]
+    branches: [windows-native-v2, codex/windows-stable-final]
   pull_request:
     branches: [windows-native-v2, main]
 
@@ -49,3 +49,77 @@ jobs:
           }
       - name: Windows test suite
         run: pytest -q
+
+  build-windows-exe:
+    name: Build verified Windows EXE
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install release dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+          pip install -e '.[build]'
+          python -m pip check
+
+      - name: Build MONWindows.exe
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --noconsole --name MONWindows --paths src --add-data 'src/campus_ops/ui/index.html;campus_ops/ui' --collect-submodules campus_ops --collect-all uvicorn --collect-all fastapi --hidden-import servicemanager --hidden-import win32service --hidden-import win32serviceutil --hidden-import win32event --hidden-import win32timezone src/campus_ops/__main__.py
+          if (-not (Test-Path '.\dist\MONWindows.exe')) {
+            throw 'MONWindows.exe was not produced.'
+          }
+
+      - name: Smoke test frozen no-console EXE
+        shell: pwsh
+        run: |
+          $env:CAMPUS_OPS_NO_BROWSER = '1'
+          $process = Start-Process -FilePath '.\dist\MONWindows.exe' -PassThru
+          $ready = $false
+          try {
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Seconds 1
+              if ($process.HasExited) {
+                throw "MONWindows.exe exited early with code $($process.ExitCode)."
+              }
+              try {
+                $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8765/api/v1/live/overview' -TimeoutSec 2
+                if ($response.StatusCode -eq 200) {
+                  $ready = $true
+                  break
+                }
+              } catch {}
+            }
+            if (-not $ready) {
+              throw 'MONWindows.exe did not expose the local API within 30 seconds.'
+            }
+          }
+          finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
+          }
+
+      - name: Generate SHA-256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash '.\dist\MONWindows.exe' -Algorithm SHA256).Hash
+          "SHA256  $hash  MONWindows.exe" | Set-Content -Encoding ascii '.\dist\MONWindows.sha256.txt'
+          Write-Host "MONWindows.exe SHA-256: $hash"
+
+      - name: Upload verified EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: MONWindows-windows-x64
+          path: |
+            dist/MONWindows.exe
+            dist/MONWindows.sha256.txt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
