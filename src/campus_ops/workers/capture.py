@@ -9,6 +9,7 @@ from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, WorkerState
 from campus_ops.state import LiveState
 from campus_ops.tooling.registry import resolve_executable
+from campus_ops.windows_process import hidden_asyncio_subprocess_kwargs
 from campus_ops.workers.base import BaseWorker
 
 FIELDS = (
@@ -179,6 +180,7 @@ class CaptureWorker(BaseWorker):
                 "-D",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
+                **hidden_asyncio_subprocess_kwargs(),
             )
             stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10.0)
         except (OSError, TimeoutError):
@@ -210,6 +212,7 @@ class CaptureWorker(BaseWorker):
                 "fields",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
+                **hidden_asyncio_subprocess_kwargs(),
             )
         except OSError:
             return FALLBACK_FIELDS
@@ -291,6 +294,7 @@ class CaptureWorker(BaseWorker):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=256 * 1024,
+                **hidden_asyncio_subprocess_kwargs(),
             )
         except OSError as exc:
             raise RuntimeError(f"TShark could not start: {exc}") from exc
