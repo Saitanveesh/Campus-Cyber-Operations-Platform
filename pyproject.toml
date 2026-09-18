@@ -3,14 +3,16 @@ requires = ["setuptools>=75", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "campus-cyber-operations-platform"
-version = "0.1.0"
-description = "Windows-native cyber operations platform for authorized labs and cyber ranges"
-requires-python = ">=3.12"
+name = "mon-windows-network-monitor"
+version = "1.0.0"
+description = "Native Windows single-source network monitoring sensor and operator console"
+requires-python = ">=3.12,<3.14"
 dependencies = [
   "fastapi>=0.116,<1",
   "uvicorn[standard]>=0.35,<1",
   "psutil>=7,<8",
+  "PyYAML>=6,<7",
+  "pywin32>=311; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]
@@ -18,10 +20,14 @@ dev = [
   "pytest>=8.4,<9",
   "pytest-asyncio>=1.1,<2",
   "ruff>=0.12,<1",
+  "httpx>=0.28,<1",
+]
+build = [
+  "pyinstaller>=6.16,<7",
 ]
 
 [project.scripts]
-campus-ops = "campus_ops.main:main"
+mon-windows = "campus_ops.main:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -40,3 +46,18 @@ asyncio_mode = "auto"
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+
+[tool.ruff.lint.per-file-ignores]
+"src/campus_ops/__main__.py" = ["I001"]
+"src/campus_ops/diagnostic_ui.py" = ["I001"]
+"src/campus_ops/pathspace_ui.py" = ["I001"]
+"src/campus_ops/stable_operator_ui.py" = ["I001"]
+"src/campus_ops/stable_ui.py" = ["I001"]
+"src/campus_ops/topology_ui.py" = ["I001"]
+"src/campus_ops/voice_ui.py" = ["I001"]
+"src/campus_ops/workers/asset_engine.py" = ["I001"]
+"src/campus_ops/workers/flow_engine.py" = ["I001"]
+"src/campus_ops/workers/incidents.py" = ["I001"]
+"src/campus_ops/workers/evidence_store.py" = ["I001"]
+"src/campus_ops/workers/windows_capture.py" = ["I001"]
+"src/campus_ops/workers/windows_network.py" = ["I001"]

@@ -1,114 +1,160 @@
-# Architecture v1
+# MON Windows 1.0 Architecture
 
-## Mission
+## Product boundary
 
-Campus Cyber Operations Platform is a Windows-native, evidence-first cyber operations system for authorized cyber-range and campus-lab environments. It is not a single packet monitor. It combines independent specialist workers under one supervisor and one live-state contract.
+MON Windows is a native Windows network monitoring sensor and local operator console.
+It is not an endpoint EDR, active scanner, firewall or full cloud SIEM. The sensor's
+core promise is narrower: derive explainable network evidence from one packet source,
+keep the collection path healthy, and make that evidence useful for investigation.
 
-## Control model
+## Data plane
 
 ```text
-Operator Console
-      |
-      v
-API / Command Gateway
-      |
-      v
-Orchestrator / Supervisor
-      |
-      +-- Session Manager
-      +-- Event Bus
-      +-- Tool Registry
-      +-- Worker Health
-      +-- Policy / Authorization
-      |
-      +-- Network Auto-Discovery Worker
-      +-- Capture Worker            -> Npcap / dumpcap
-      +-- Protocol Worker           -> TShark / native decoders
-      +-- Flow Worker
-      +-- Asset Worker
-      +-- Performance Worker
-      +-- Topology Worker
-      +-- IDS Worker                -> Suricata
-      +-- Behaviour Worker
-      +-- Malware Worker            -> YARA / IOC adapters
-      +-- Endpoint Worker           -> enrolled agents only
-      +-- Response Worker           -> permission gated
-      +-- Incident Correlator
-      +-- Evidence Worker
-      +-- Voice / Siren Worker
-      +-- Storage Worker
+Windows Wi-Fi / Ethernet
+        |
+ Windows network election
+        |
+ alias -> InterfaceGuid -> Npcap device
+        |
+      TShark                 one managed capture process
+        |
+ normalized packet observations
+        |
+      EventBus
+        |
+  +-----+------------------------------+
+  |     |       |       |              |
+asset  flow  topology protocols   DNS/service/TCP
+  |     |       |       |              |
+  +-----+-------+-------+--------------+
+        |
+behavior / baseline / ARP / beacon / DoS
+        |
+alerts -> incident correlation
+        |
+LiveState + bounded metadata EvidenceStore
+        |
+Windows API -> operator console
 ```
 
-## Why multiple workers
+TShark through Npcap is the only packet acquisition path. MON does not start a second
+collector, IDS engine or scanner. All relationship/security views use the same packet
+observations so one UI cannot silently disagree with another because of a separate data
+pipeline.
 
-Each worker owns one responsibility and exchanges typed events. External tools are adapters, not the application architecture. If one tool is unavailable, the supervisor reports a degraded capability instead of fabricating data.
+## Windows network control plane
 
-Examples:
+`WindowsNetworkDiscoveryWorker` uses native Windows routing/adapter information to
+select one usable adapter. It combines `Get-NetAdapter`, `Get-NetRoute`,
+`Get-NetIPInterface`, and local interface statistics. Physical routed Wi-Fi/Ethernet is
+preferred over Hyper-V, WSL, VPN and other virtual adapters.
 
-- dumpcap/Npcap: privileged packet acquisition
-- TShark: deep protocol decoding
-- Suricata: mature signature/IDS telemetry
-- YARA: file-content rules where a file is legitimately extracted
-- native workers: session truth, correlation, topology, baselines, evidence, UI contracts
+Windows route selection considers route metric plus interface metric. Interface changes
+and network-identity changes require repeated confirmation. Several consecutive missing
+observations are required before an active session is torn down. Temporary IPv6 privacy
+address rotation does not reset an IPv4 session.
 
-## Live-state contract
+The session manager subscribes only to network-control events. High packet volume can
+therefore cause a slow analysis consumer to drop data without displacing an adapter or
+session transition.
 
-1. Exactly one active live session exists at a time.
-2. A network identity change closes the old session before a new one opens.
-3. Live API responses include the current session id.
-4. Historical records are never used as fallback values for live fields.
-5. Worker failure produces `DEGRADED` or `FAILED`, never frozen stale values presented as healthy.
-6. Every observation carries source worker, timestamp, session id, and evidence class.
+## Capture binding
 
-## Network auto-discovery
+`WindowsCaptureWorker` resolves the selected Windows adapter alias to its
+`InterfaceGuid`, then matches that GUID to TShark/Npcap's capture interface. This is
+preferred to fuzzy matching text such as `Wi-Fi` because multiple adapters can have
+similar descriptions.
 
-The platform elects a capture interface from host-local evidence:
+Capture health is process-based:
 
-- adapter operational state
-- usable unicast IPv4/IPv6
-- default route ownership
-- route metric
-- loopback/virtual/tunnel classification
-- traffic counters
-- known capture backend visibility
-- hysteresis to prevent interface flapping
+- `ACTIVE` means the managed TShark process is alive and bound.
+- `traffic_activity=PACKETS` means recent packets arrived.
+- `traffic_activity=QUIET` means the wire was quiet while TShark remained healthy.
+- a real process exit is `ERROR` and is surfaced by Watchdog/System diagnostics.
 
-Manual interface pinning will be supported, but automatic election is the default.
+## Evidence truth model
 
-## Visibility levels
+A syntactically valid IP address is not proof of a host.
 
-The UI must always disclose what evidence is actually available.
+Local asset promotion requires:
 
-- Access-port mode: host traffic plus broadcasts/multicasts visible to the endpoint
-- SPAN/TAP mode: mirrored packet visibility for the configured scope
-- Flow mode: NetFlow/IPFIX/sFlow summaries
-- Infrastructure mode: SNMP/LLDP/syslog/network-controller telemetry
-- Endpoint mode: enrolled-agent host evidence
+1. a packet from the current session;
+2. an IP inside the selected local network (or the sensor/gateway identity);
+3. a valid unicast source MAC; and
+4. repeated source-frame observations.
 
-The system never labels access-port observations as full campus visibility.
+Remote addresses can appear as packet-observed peers when a real packet contains them,
+but they are not promoted to local assets. Typed/unseen IPs are rejected by the
+Investigation route instead of receiving a risk or safety verdict.
 
-## Endpoint control
+Topology uses packet observations only. Path Space presents observed communication
+relationships plus the configured Windows gateway as a routing boundary. A configured
+gateway is context, not proof of a measured physical hop. Physical switch/router paths
+are never invented.
 
-Remote access and response are separate from passive visibility. Only explicitly enrolled or lab-authorized systems may accept control actions. Actions are authenticated, authorization-gated, logged, and tied to an operator identity and incident context.
+## Analysis layer
 
-## UI direction
+The Windows runtime currently includes deterministic, evidence-backed components for:
 
-Monochrome only: black, white, grey, borders, typography, motion and density convey state. The topology is an operational graph, not decoration.
+- protocol/application/DNS/service/TCP context;
+- per-asset and per-flow traffic behavior;
+- ARP ownership change detection;
+- SYN fan-out / reconnaissance-like behavior;
+- DNS rate anomalies;
+- periodic/beacon-like communication;
+- DoS/traffic pressure warnings;
+- baseline/performance telemetry;
+- alert deduplication and incident correlation.
 
-Planned views:
+The design intentionally does not make an AI model the source of truth. A future AI
+assistant may summarize established evidence, but asset existence, packet relationships,
+alerts and runtime health remain deterministic.
 
-- Overview
-- Physical / Logical / Communication / Security Topology
-- Assets
-- Traffic / Protocols / TCP / DNS
-- Performance
-- Security / Malware
-- Incidents
-- Endpoint Control
-- Packets / Evidence
-- History
-- System Health
+## History and investigation
 
-## Build strategy
+Live state is current-session-only. For investigations, `EvidenceStoreWorker` writes a
+bounded SQLite history in `C:\ProgramData\MON\evidence.db`:
 
-Foundation -> capture/session -> protocols/flows -> assets/performance -> topology -> IDS/behaviour -> malware -> endpoint agent/control -> incidents -> evidence -> voice/siren -> cyber-range integration -> installer/hardening.
+- security/control events;
+- periodic aggregate asset snapshots; and
+- periodic aggregate flow snapshots.
+
+Default retention is seven days with row limits. This worker does not retain raw packet
+payloads or PCAP.
+
+Investigation correlates the current live asset/flow/topology/alert/incident evidence and
+adds recent historical metadata for a target that is already proven by the current
+TShark session.
+
+## Runtime supervision
+
+Watchdog/System checks the sensor itself as part of the monitoring contract:
+
+- native-Windows execution;
+- selected adapter and active session;
+- TShark backend/PID/capture device;
+- network/capture adapter alignment;
+- analysis worker health;
+- event-bus drops; and
+- evidence-store health.
+
+Each detected fault is returned as `problem`, `evidence`, `cause`, `fix`, and `verify`
+rather than as a generic red status.
+
+## UI contract
+
+The Windows console intentionally exposes only:
+
+`Overview · Network · Topology · Path Space · Security · Investigation · System · Watchdog`
+
+There is no Admin panel, active-probe console, Nmap/tool hub, quarantine panel or remote
+shell. Browser voice is a local notification aid and is not another telemetry pipeline.
+
+## SaaS evolution boundary
+
+The branch contains a persistent `sensor_id` and optional tenant/site labels so a later
+cloud control plane has a stable local identity. That does not make the current branch a
+production SaaS service. A hosted product still needs separately reviewed authenticated
+sensor enrollment, mutually authenticated/TLS transport, tenant isolation, RBAC, audit
+logs, cloud retention controls, secret rotation, rate limiting, backups, monitoring and
+incident-response processes.
