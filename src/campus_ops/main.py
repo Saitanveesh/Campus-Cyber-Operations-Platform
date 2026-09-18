@@ -39,11 +39,18 @@ def build_app():
 
 def main() -> None:
     threading.Timer(1.2, _open_console).start()
+    # The release EXE is built with PyInstaller --noconsole. In that mode
+    # sys.stdout/sys.stderr can be None, while Uvicorn's default logging
+    # formatter calls .isatty() on those streams during startup. Disable
+    # Uvicorn's console log configuration for the frozen/direct-launch path;
+    # the Windows Service has its own rotating file logger.
     uvicorn.run(
         build_app(),
         host=DEFAULT_SETTINGS.host,
         port=DEFAULT_SETTINGS.port,
         log_level="warning",
+        access_log=False,
+        log_config=None,
     )
 
 
