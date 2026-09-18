@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections import defaultdict, deque
 import ipaddress
 import time
+from collections import defaultdict, deque
 
 from campus_ops.event_bus import EventBus
 from campus_ops.models import Event, EventKind, Severity, WorkerState
