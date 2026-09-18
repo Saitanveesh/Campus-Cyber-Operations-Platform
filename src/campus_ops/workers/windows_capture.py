@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 from typing import Any
 
 from campus_ops.workers.capture import CaptureWorker
@@ -12,7 +13,7 @@ def _powershell_json(script: str, timeout: float = 5.0) -> object:
     if os.name != "nt":
         return []
     try:
-        process = __import__("subprocess").run(
+        process = subprocess.run(
             [
                 "powershell.exe",
                 "-NoProfile",
@@ -27,12 +28,16 @@ def _powershell_json(script: str, timeout: float = 5.0) -> object:
             timeout=timeout,
             check=False,
         )
-    except (OSError, TimeoutError):
+    except (OSError, subprocess.TimeoutExpired):
+        # Adapter metadata is advisory. A blocked/missing PowerShell process must not
+        # crash the capture worker; TShark alias fallback can still be attempted.
         return []
     if process.returncode != 0 or not process.stdout.strip():
         return []
     try:
-        return json.loads(process.stdout)
+        # Windows PowerShell can occasionally prepend a UTF BOM depending on host
+        # encoding. Strip it so valid JSON is not rejected as a capture failure.
+        return json.loads(process.stdout.lstrip("\ufeff").strip())
     except (TypeError, ValueError, json.JSONDecodeError):
         return []
 
