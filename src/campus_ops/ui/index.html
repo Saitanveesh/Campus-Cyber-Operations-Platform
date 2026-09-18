@@ -68,6 +68,7 @@ const shortTime=v=>{if(!v)return'—';const d=new Date(v);return Number.isNaN(d.
 const pretty=v=>{try{return JSON.stringify(v)}catch{return String(v)}};
 let snapshot={},selectedNode=null,ws=null,wsRetry=null,lastGoodAt=0,transportFailures=0;
 const TRANSPORT_GRACE_MS=12000;
+const LIVE_STALE_MS=1500;
 const pages={overview:['Overview','Current packet-derived monitoring state.'],network:['Network','Selected interface and live capture pipeline.'],topology:['Topology','Observed communication relationships.'],assets:['Assets','Confirmed local source identities.'],traffic:['Traffic','Observed packet conversations and protocol metrics.'],security:['Security','Deterministic packet-derived alerts and incidents.'],system:['System','Stable runtime health and worker state.']};
 function setView(name){document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id==='view-'+name));document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.view===name));const p=pages[name]||[name,''];$('pageTitle').textContent=p[0];$('pageSub').textContent=p[1]||'';}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>setView(b.dataset.view));
@@ -93,8 +94,10 @@ function liveConnection(ok,text){$('liveDot').classList.toggle('off',!ok);$('con
 function markTransportHealthy(){lastGoodAt=Date.now();transportFailures=0;liveConnection(true,'Live')}
 function markTransportFailure(){transportFailures+=1;const age=lastGoodAt?Date.now()-lastGoodAt:Number.POSITIVE_INFINITY;if(lastGoodAt&&age<TRANSPORT_GRACE_MS){liveConnection(false,'Reconnecting · last known state retained');return}if(!lastGoodAt&&transportFailures<3){liveConnection(false,'Connecting');return}$('overall').textContent='OFFLINE';$('headerState').textContent='OFFLINE';$('captureState').textContent='UNAVAILABLE';liveConnection(false,'Console API unavailable')}
 async function refresh(){try{const r=await fetch('/api/v1/live/status',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);render(await r.json());markTransportHealthy()}catch(e){markTransportFailure()}}
-function connectWebSocket(){if(ws&&ws.readyState<=1)return;const scheme=location.protocol==='https:'?'wss':'ws';ws=new WebSocket(`${scheme}://${location.host}/api/v1/live/ws`);ws.onopen=()=>liveConnection(true,'Connected · waiting for live state');ws.onmessage=e=>{try{render(JSON.parse(e.data));markTransportHealthy()}catch{}};ws.onclose=()=>{liveConnection(false,'Reconnecting · last known state retained');clearTimeout(wsRetry);wsRetry=setTimeout(connectWebSocket,1800)};ws.onerror=()=>ws.close()}
-connectWebSocket();setInterval(()=>{if(!ws||ws.readyState!==1)refresh()},3000);refresh();
+function connectWebSocket(){if(ws&&ws.readyState<=1)return;const scheme=location.protocol==='https:'?'wss':'ws';ws=new WebSocket(`${scheme}://${location.host}/api/v1/live/ws`);ws.onopen=()=>liveConnection(true,'Connected · waiting for live state');ws.onmessage=e=>{try{render(JSON.parse(e.data));markTransportHealthy()}catch(err){console.error('MON live render failed',err);markTransportFailure()}};ws.onclose=()=>{liveConnection(false,'Reconnecting · last known state retained');clearTimeout(wsRetry);wsRetry=setTimeout(connectWebSocket,1800)};ws.onerror=()=>ws.close()}
+connectWebSocket();
+setInterval(()=>{const stale=!lastGoodAt||(Date.now()-lastGoodAt)>LIVE_STALE_MS;if(!ws||ws.readyState!==1||stale)refresh()},1000);
+refresh();
 </script>
 </body>
 </html>
