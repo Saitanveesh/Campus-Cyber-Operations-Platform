@@ -186,3 +186,17 @@ def test_windows_route_aliases_are_case_normalized():
     source = Path("src/campus_ops/workers/windows_network.py").read_text(encoding="utf-8")
     assert "key = name.casefold()" in source
     assert "routes.get(name.casefold()" in source
+
+
+def test_windows_console_keeps_hidden_live_render_targets_mounted():
+    source = Path("src/campus_ops/stable_ui.py").read_text(encoding="utf-8")
+    assert "backingView.setAttribute('aria-hidden','true')" in source
+    assert "document.getElementById(`view-${view}`)?.remove()" not in source
+
+
+def test_console_recovers_from_open_but_stale_websocket_every_second():
+    source = Path("src/campus_ops/ui/index.html").read_text(encoding="utf-8")
+    assert "LIVE_STALE_MS=1500" in source
+    assert "setInterval(()=>{const stale=" in source
+    assert "refresh()},1000)" in source
+    assert "MON live render failed" in source
