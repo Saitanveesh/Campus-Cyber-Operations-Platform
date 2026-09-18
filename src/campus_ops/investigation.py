@@ -148,6 +148,46 @@ def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]
     open_incidents = [
         item for item in incidents if str(item.get("status") or "OPEN").upper() != "CLOSED"
     ]
+
+    identity = None
+    if asset:
+        identity = {
+            "hostname": asset.get("hostname"),
+            "hostname_sources": asset.get("hostname_sources") or {},
+            "mac": asset.get("mac"),
+            "vendor": asset.get("vendor"),
+            "role": asset.get("role") or asset.get("classification"),
+            "vlan_id": asset.get("vlan_id"),
+            "first_seen": asset.get("first_seen"),
+            "last_seen": asset.get("last_seen"),
+            "observed_ttl": asset.get("observed_ttl"),
+            "estimated_initial_ttl": asset.get("estimated_initial_ttl"),
+            "estimated_hops": asset.get("estimated_hops"),
+            "ip_stack_hint": asset.get("ip_stack_hint"),
+            "ip_stack_hint_confidence": asset.get("ip_stack_hint_confidence"),
+            "observed_services": asset.get("observed_services") or [],
+            "top_peers": asset.get("top_peers") or [],
+            "top_protocols": asset.get("top_protocols") or [],
+            "top_application_names": asset.get("top_application_names") or [],
+            "identity_evidence": asset.get("identity_evidence"),
+            "confidence": asset.get("confidence"),
+        }
+
+    security_indicators = []
+    for alert in alerts:
+        payload = alert.get("payload") if isinstance(alert.get("payload"), dict) else {}
+        evidence = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+        security_indicators.append(
+            {
+                "title": payload.get("title") or alert.get("kind") or "Security indicator",
+                "severity": alert.get("severity"),
+                "confidence": payload.get("confidence"),
+                "evidence_class": alert.get("evidence_class"),
+                "claim": evidence.get("claim"),
+                "evidence": evidence,
+                "timestamp": alert.get("timestamp"),
+            }
+        )
     risk_score = 40 if alerts else 0
     reasons: list[str] = []
     if alerts:
@@ -174,6 +214,8 @@ def build_investigation(snapshot: dict[str, Any], target: str) -> dict[str, Any]
         "session_id": snapshot.get("session_id"),
         "observed": True,
         "asset": asset,
+        "identity": identity,
+        "security_indicators": security_indicators[:50],
         "flows": flows[:100],
         "topology_edges": edges[:100],
         "alerts": alerts[:100],
