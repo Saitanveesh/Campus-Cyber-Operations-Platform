@@ -25,8 +25,12 @@ _WINDOWS_CONSOLE = r"""
   // and raw Traffic remain internal data models used by Topology, Path Space and
   // Investigation; they are not separate consoles.
   for(const view of ['assets','traffic']){
+    // Remove only the navigation entry. Keep the backing DOM view mounted because
+    // the shared live renderer updates these nodes every second even though Windows
+    // does not expose Assets/Traffic as standalone operator workspaces.
     document.querySelector(`button.tab[data-view="${view}"]`)?.remove();
-    document.getElementById(`view-${view}`)?.remove();
+    const backingView=document.getElementById(`view-${view}`);
+    if(backingView)backingView.setAttribute('aria-hidden','true');
     try{delete pages[view]}catch{}
   }
 
