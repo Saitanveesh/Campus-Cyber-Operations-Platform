@@ -7,7 +7,7 @@ on:
     branches: [windows-native-v2, main]
 
 concurrency:
-  group: windows-ci-${{ github.head_ref || github.ref_name }}
+  group: windows-ci-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -52,6 +52,7 @@ jobs:
 
   build-windows-exe:
     name: Build verified Windows EXE
+    if: github.event_name == 'push'
     needs: test
     runs-on: windows-latest
     steps:
