@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import UTC, datetime
 
 import psutil
 
@@ -32,6 +33,7 @@ class TelemetryWorker(BaseWorker):
         self.health.state = WorkerState.HEALTHY
         previous = None
         previous_interface: str | None = None
+        previous_session_id: str | None = None
         previous_t = time.monotonic()
         while not self.stopping:
             interface = self.interface_provider()
@@ -52,25 +54,34 @@ class TelemetryWorker(BaseWorker):
                 await asyncio.sleep(self.interval)
                 continue
 
-            # Never compare counters from two different NICs. A legitimate interface
-            # failover otherwise looks like an enormous traffic spike to every
-            # downstream baseline/anomaly engine.
-            if interface != previous_interface:
+            # Never compare counters across NICs or monitoring sessions. Doing so can
+            # turn a legitimate failover/session reset into a synthetic traffic spike.
+            if interface != previous_interface or session_id != previous_session_id:
                 previous = None
                 previous_t = now
 
+            rate_valid = bool(
+                session_id
+                and interface
+                and current is not None
+                and previous is not None
+                and interface == previous_interface
+                and session_id == previous_session_id
+            )
             values = {
                 "cpu_percent": cpu,
                 "memory_percent": memory,
                 "interface": interface,
-                "rx_bps": 0.0,
-                "tx_bps": 0.0,
-                "rx_pps": 0.0,
-                "tx_pps": 0.0,
-                "rx_bytes_total": current.bytes_recv if current else 0,
-                "tx_bytes_total": current.bytes_sent if current else 0,
+                "telemetry_rate_valid": rate_valid,
+                "telemetry_sample_at": datetime.now(UTC).isoformat(),
+                "rx_bps": None,
+                "tx_bps": None,
+                "rx_pps": None,
+                "tx_pps": None,
+                "rx_bytes_total": current.bytes_recv if current else None,
+                "tx_bytes_total": current.bytes_sent if current else None,
             }
-            if current is not None and previous is not None:
+            if rate_valid:
                 dt = max(now - previous_t, 0.001)
                 values.update(
                     rx_bps=max(0.0, (current.bytes_recv - previous.bytes_recv) * 8 / dt),
@@ -79,7 +90,10 @@ class TelemetryWorker(BaseWorker):
                     tx_pps=max(0.0, (current.packets_sent - previous.packets_sent) / dt),
                 )
             self.state.update_metrics(**values)
-            if session_id:
+
+            # Downstream baselines receive only measured deltas. The first sample
+            # after startup/session change is a baseline point, not a fabricated zero.
+            if session_id and rate_valid:
                 await self.bus.publish(
                     Event(
                         source=self.name,
@@ -91,6 +105,7 @@ class TelemetryWorker(BaseWorker):
                 )
             previous = current
             previous_interface = interface
+            previous_session_id = session_id
             previous_t = now
             self.health.state = WorkerState.HEALTHY
             self.health.heartbeat(f"interface={interface or 'none'}")
