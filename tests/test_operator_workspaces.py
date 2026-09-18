@@ -33,9 +33,9 @@ def test_unseen_target_never_receives_green_or_numeric_security_verdict():
 
 
 def test_operator_workspace_has_no_admin_or_forensics_gate():
-    routes = Path("src/campus_ops/stable_operator.py").read_text()
-    ui = Path("src/campus_ops/stable_operator_ui.py").read_text()
-    topology = Path("src/campus_ops/topology_ui.py").read_text()
+    routes = Path("src/campus_ops/stable_operator.py").read_text(encoding="utf-8")
+    ui = Path("src/campus_ops/stable_operator_ui.py").read_text(encoding="utf-8")
+    topology = Path("src/campus_ops/topology_ui.py").read_text(encoding="utf-8")
 
     assert "/api/v1/operator/targets" in routes
     assert "/api/v1/operator/investigate/{target}" in routes
