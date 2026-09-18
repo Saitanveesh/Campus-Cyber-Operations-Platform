@@ -37,15 +37,34 @@ def _observed_targets(snapshot: dict[str, object]) -> list[dict[str, object]]:
     assets = [item for item in live.get("assets", []) if isinstance(item, dict)]
     flows = [item for item in live.get("flows", []) if isinstance(item, dict)]
     edges = [item for item in live.get("topology_edges", []) if isinstance(item, dict)]
+    metrics = live.get("metrics") if isinstance(live.get("metrics"), dict) else {}
+    passive_names = (
+        metrics.get("passive_ip_names")
+        if isinstance(metrics.get("passive_ip_names"), dict)
+        else {}
+    )
+
+    def name_for(ip: str) -> tuple[str, str]:
+        values = passive_names.get(ip)
+        if not isinstance(values, list) or not values:
+            return "", ""
+        first = values[0] if isinstance(values[0], dict) else {}
+        return str(first.get("name") or ""), str(first.get("source") or "")
 
     rows: dict[str, dict[str, object]] = {}
     for asset in assets:
         ip = _real_ip(asset.get("ip"))
         if not ip:
             continue
+        passive_name, passive_name_source = name_for(ip)
         rows[ip] = {
             "ip": ip,
-            "name": asset.get("hostname") or asset.get("dhcp_hostname") or "",
+            "name": asset.get("hostname") or asset.get("dhcp_hostname") or passive_name or "",
+            "name_source": (
+                "ASSET_IDENTITY"
+                if asset.get("hostname") or asset.get("dhcp_hostname")
+                else passive_name_source
+            ),
             "vendor": asset.get("vendor") or "",
             "mac": asset.get("mac") or "",
             "classification": asset.get("classification") or asset.get("role") or "LOCAL_ASSET",
@@ -64,11 +83,13 @@ def _observed_targets(snapshot: dict[str, object]) -> list[dict[str, object]]:
             ip = _real_ip(flow.get(key))
             if not ip:
                 continue
+            passive_name, passive_name_source = name_for(ip)
             row = rows.setdefault(
                 ip,
                 {
                     "ip": ip,
-                    "name": "",
+                    "name": passive_name,
+                    "name_source": passive_name_source,
                     "vendor": "",
                     "mac": "",
                     "classification": "OBSERVED_PACKET_PEER",
@@ -91,11 +112,13 @@ def _observed_targets(snapshot: dict[str, object]) -> list[dict[str, object]]:
             ip = _real_ip(edge.get(key))
             if not ip:
                 continue
+            passive_name, passive_name_source = name_for(ip)
             row = rows.setdefault(
                 ip,
                 {
                     "ip": ip,
-                    "name": "",
+                    "name": passive_name,
+                    "name_source": passive_name_source,
                     "vendor": "",
                     "mac": "",
                     "classification": "OBSERVED_PACKET_PEER",
