@@ -10,6 +10,7 @@ from dataclasses import asdict
 import psutil
 
 from campus_ops.models import Event, EventKind, NetworkCandidate, SelectedNetwork, WorkerState
+from campus_ops.windows_process import hidden_subprocess_kwargs
 from campus_ops.workers.base import BaseWorker
 
 VIRTUAL_HINTS = (
@@ -58,6 +59,7 @@ def _powershell_json(script: str, timeout: float = 7.0) -> object:
         text=True,
         timeout=timeout,
         check=False,
+        **hidden_subprocess_kwargs(),
     )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or "PowerShell network discovery failed")
