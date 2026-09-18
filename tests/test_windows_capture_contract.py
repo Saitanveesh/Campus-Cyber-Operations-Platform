@@ -1,6 +1,6 @@
 import subprocess
 
-import campus_ops.workers.windows_capture as windows_capture
+from campus_ops.workers import windows_capture
 from campus_ops.workers.windows_capture import _parse_tshark_interfaces
 
 
